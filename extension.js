@@ -3248,21 +3248,6 @@ class Pond {
         // lá đang chìm dưới mặt nước (cá sẽ bơi đè lên)
         for (const l of sunk) l.draw(cr, false);
 
-        // ánh sáng lăn tăn dưới nước
-        for (let i = 0; i < 5; i++) {
-            const y0 = (i + 0.5) / 5 * h;
-            cr.newPath();
-            for (let x = 0; x <= w + 60 * u; x += 60 * u) {
-                const y = y0
-                    + Math.sin(t * 0.45 + x * 0.006 / u + i * 1.7) * 26 * u
-                    + Math.sin(t * 0.27 + x * 0.013 / u + i * 0.9) * 12 * u;
-                if (x === 0) cr.moveTo(x, y); else cr.lineTo(x, y);
-            }
-            cr.setLineWidth(lw(10 * u));
-            cr.setSourceRGBA(0.8, 1, 1, 0.035);
-            cr.stroke();
-        }
-
         // cá (bóng rồi thân), lá sen phủ lên trên
         // con ở sâu vẽ trước, con ở cao vẽ đè lên
         const fishByZ = [...this.fish].sort((a, b) => a.zBase - b.zBase);

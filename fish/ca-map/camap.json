@@ -1,0 +1,18 @@
+{
+  "facing": "right",
+  "length": 9.4,
+  "headOffset": 0.75,
+  "size": [16, 26],
+  "speed": [32, 46],
+  "strips": 32,
+  "tailSwing": 0.25,
+  "segments": 15,
+  "spacing": 0.5,
+  "bend": 0.12,
+  "wave": {
+    "amplitude": 0.065,
+    "step": 0.58,
+    "speed": 0.78
+  },
+  "profile": [0.5, 0.55, 0.57, 0.57, 0.55, 0.52, 0.48, 0.43, 0.37, 0.31, 0.25, 0.19, 0.14, 0.1, 0.07]
+}
