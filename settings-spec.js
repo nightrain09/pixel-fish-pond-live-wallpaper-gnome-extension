@@ -36,6 +36,7 @@ export const SPEC = [
             I('pad-count', 'PAD_COUNT', 'Lily pads', '', 6, 0, 20, 1, {structural: true}),
             I('leaf-count', 'LEAF_COUNT', 'Fallen leaves', 'Small leaves drifting on the water surface', 9, 0, 40, 1, {structural: true}),
             I('weed-count', 'WEED_COUNT', 'Weed clusters', 'Waterweed on the bottom', 7, 0, 30, 1, {structural: true}),
+            I('layout-seed', 'LAYOUT_SEED', 'Layout seed', 'Same number = same pond layout every time. 0 = pick a random one on first run and remember it', 0, 0, 999999, 1, {structural: true}),
         ],
     },
     {

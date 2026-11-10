@@ -36,6 +36,17 @@ export default class KoiPondPreferences extends ExtensionPreferences {
                 if (r.dependsOn)
                     settings.bind(r.dependsOn, rows.get(r.key), 'sensitive', Gio.SettingsBindFlags.GET);
             }
+            if (g.id === 'scene') {
+                const rollRow = new Adw.ActionRow({
+                    title: 'New random layout',
+                    subtitle: 'Pick a new seed; the pond is rebuilt once with a different arrangement',
+                });
+                const rollBtn = new Gtk.Button({label: 'Roll', valign: Gtk.Align.CENTER});
+                rollBtn.connect('clicked', () =>
+                    settings.set_int('layout-seed', 1 + Math.floor(Math.random() * 999999)));
+                rollRow.add_suffix(rollBtn);
+                group.add(rollRow);
+            }
             page.add(group);
 
             const resetGroup = new Adw.PreferencesGroup();
@@ -44,8 +55,10 @@ export default class KoiPondPreferences extends ExtensionPreferences {
                 halign: Gtk.Align.START,
             });
             btn.connect('clicked', () => {
-                for (const r of g.rows)
-                    settings.reset(r.key);
+                for (const r of g.rows) {
+                    if (r.key !== 'layout-seed')   // giữ nguyên bố cục hiện tại
+                        settings.reset(r.key);
+                }
             });
             resetGroup.add(btn);
             page.add(resetGroup);

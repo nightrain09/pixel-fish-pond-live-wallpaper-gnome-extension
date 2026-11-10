@@ -56,6 +56,12 @@
       <summary>Weed clusters</summary>
       <description>Waterweed on the bottom</description>
     </key>
+    <key name="layout-seed" type="i">
+      <default>0</default>
+      <range min="0" max="999999"/>
+      <summary>Layout seed</summary>
+      <description>Same number = same pond layout every time. 0 = pick a random one on first run and remember it</description>
+    </key>
     <key name="time-override-enabled" type="b">
       <default>false</default>
       <summary>Fix the time</summary>
