@@ -1622,10 +1622,12 @@ class Weed {
 
 // ───────────── Ao ─────────────
 class Pond {
-    constructor(w, h, seed = 1) {
+    constructor(w, h, seed = 1, snap = null) {
         this.w = w;
         this.h = h;
         this.seed = seed;
+        // số lượng lúc dựng (snapshot dùng để biết cần thêm / bớt bao nhiêu vật)
+        this.counts = {fish: FISH_COUNT, pad: PAD_COUNT, leaf: LEAF_COUNT, weed: WEED_COUNT};
         this.u = w / 960;
         this.t = 0;
         this.ripples = [];
@@ -1692,6 +1694,158 @@ class Pond {
         this._initWaves();
         this._initLight();
         this._buildCache();
+
+        // đổi cài đặt: áp lại trạng thái của bể cũ (sóng đang lan thì bỏ)
+        if (snap) {
+            try {
+                this._restore(snap);
+            } catch (e) {
+                logError(e, 'koipond restore');
+            }
+        }
+    }
+
+    // ───── Chụp / áp lại trạng thái ─────
+    // Vị trí lưu theo tỉ lệ so với bể, độ dài theo đơn vị u => dùng được cả khi đổi pixel size.
+    snapshot() {
+        const {w, h, u} = this;
+        const padIdx = new Map(this.pads.map((p, i) => [p, i]));
+        return {
+            counts: {...this.counts},
+            t: this.t,
+            spawnT: this._spawnT,
+            fish: this.fish.map(f => ({
+                x: f.x / w, y: f.y / h, angle: f.angle,
+                size: f.size / u, base: f.base / u, speed: f.speed / u,
+                turn: f.turn, phase: f.phase,
+                zBase: f.zBase / u, zTarget: f.zTarget / u, zT: f.zT, actT: f.actT,
+                action: f.action ? {...f.action} : null, turnTarget: f.turnTarget,
+                segs: f.segs.map(g => [g.x / w, g.y / h]),
+            })),
+            pads: this.pads.map(p => ({
+                x: p.x / w, y: p.y / h, r: p.r / u, a: p.a, ph: p.ph, pulse: p.pulse,
+                flower: p.flower, notch: p.notch, vx: p.vx / u, vy: p.vy / u, av: p.av,
+            })),
+            leaves: this.leaves.filter(l => !l.dead).map(l => ({
+                x: l.x / w, y: l.y / h, vx: l.vx / u, vy: l.vy / u, vz: l.vz / u,
+                len: l.len / u, a: l.a, av: l.av, spin: l.spin, ph: l.ph, color: l.color,
+                state: l.state, home: l.home ? (padIdx.get(l.home) ?? -1) : -1,
+                h: l.h / u, wetLimit: l.wetLimit, wetT: l.wetT, sinkWait: l.sinkWait,
+                sinkT: l.sinkT, fade: l.fade, soak: l.soak, bedTilt: l.bedTilt,
+                bedFade: l.bedFade, retire: l.retire,
+            })),
+        };
+    }
+
+    _restore(snap) {
+        const {w, h, u} = this;
+        this.t = snap.t;
+        this._spawnT = snap.spawnT;
+
+        // cá: con nào còn thì giữ nguyên trạng thái, con mới thêm giữ vị trí tạo từ seed
+        const nf = Math.min(snap.fish.length, this.fish.length);
+        for (let i = 0; i < nf; i++) {
+            const s = snap.fish[i], f = this.fish[i];
+            f.x = s.x * w; f.y = s.y * h; f.angle = s.angle;
+            f.size = s.size * u; f.base = s.base * u; f.speed = s.speed * u;
+            f.turn = s.turn; f.phase = s.phase;
+            f.zBase = s.zBase * u; f.zTarget = s.zTarget * u; f.zT = s.zT; f.actT = s.actT;
+            f.action = s.action ? {...s.action} : null;
+            f.turnTarget = s.turnTarget;
+            f.spacing = f.size * 0.55;
+            f.zH = f.size * FISH_THICK;
+            f.segs = s.segs.map(([x, y]) => ({x: x * w, y: y * h}));
+        }
+
+        // lá sen
+        const np = Math.min(snap.pads.length, this.pads.length);
+        for (let i = 0; i < np; i++) {
+            const s = snap.pads[i], p = this.pads[i];
+            p.x = s.x * w; p.y = s.y * h; p.r = s.r * u; p.a = s.a; p.ph = s.ph;
+            p.pulse = s.pulse; p.flower = s.flower; p.notch = s.notch;
+            p.vx = s.vx * u; p.vy = s.vy * u; p.av = s.av;
+            p.mass = p.r * p.r * 4;
+            p.invMass = 1 / p.mass;
+        }
+        // lá sen thêm mới: tìm chỗ trống, không đè lá sen đang có
+        withSeed(hashSeed(this.seed, 'padfix'), () => {
+            for (let i = np; i < this.pads.length; i++) {
+                const pad = this.pads[i];
+                const clear = () => this.pads.every(q => q === pad ||
+                    Math.hypot(pad.x - q.x, pad.y - q.y) > (pad.r + q.r) * PAD_GAP);
+                for (let k = 0; k < 80 && !clear(); k++) {
+                    pad.x = rand(0.08, 0.92) * w;
+                    pad.y = rand(0.08, 0.92) * h;
+                }
+            }
+        });
+
+        // lá rụng: lấy lại toàn bộ lá cũ (kể cả lá dưới đáy), rồi thêm / bớt theo chênh lệch số lượng
+        const seeded = this.leaves;
+        const restored = snap.leaves.map(s => {
+            const l = new Leaf(this);
+            l.x = s.x * w; l.y = s.y * h;
+            l.vx = s.vx * u; l.vy = s.vy * u; l.vz = s.vz * u;
+            l.len = s.len * u;
+            l.rad = l.len * 0.5;
+            l.mass = l.len * l.len;
+            l.invMass = 1 / l.mass;
+            l.invI = 1 / (l.mass * l.len * l.len * 0.22);
+            l.a = s.a; l.av = s.av; l.spin = s.spin; l.ph = s.ph; l.color = s.color;
+            l.state = s.state;
+            l.h = s.h * u;
+            l.wetLimit = s.wetLimit; l.wetT = s.wetT; l.sinkWait = s.sinkWait;
+            l.sinkT = s.sinkT; l.fade = s.fade; l.soak = s.soak;
+            l.bedTilt = s.bedTilt; l.bedFade = s.bedFade; l.retire = s.retire;
+            l.home = null;
+            if (s.state === 'pad') {
+                const home = this.pads[s.home];
+                if (home) {
+                    l.home = home;
+                    l._padX = home.x; l._padY = home.y; l._padA = home.a;
+                } else {
+                    // lá sen đã bị bớt: lá rơi xuống nước
+                    l.state = 'water';
+                    l.h = 0; l.vx = 0; l.vy = 0; l.vz = 0;
+                }
+            }
+            return l;
+        });
+
+        const delta = this.counts.leaf - snap.counts.leaf;
+        if (delta < 0) {
+            // bớt lá: bỏ các lá còn nổi, từ cuối danh sách
+            let drop = -delta;
+            for (let i = restored.length - 1; i >= 0 && drop > 0; i--) {
+                const st = restored[i].state;
+                if (st !== 'sink' && st !== 'bed') {
+                    restored.splice(i, 1);
+                    drop--;
+                }
+            }
+        }
+        this.leaves = restored;
+        if (delta > 0) {
+            // thêm lá: đặt xuống nước ở chỗ trống (vị trí chọn theo seed)
+            withSeed(hashSeed(this.seed, 'leaffix'), () => {
+                for (const leaf of seeded.slice(snap.counts.leaf, this.counts.leaf)) {
+                    leaf.state = 'water';
+                    leaf.home = null;
+                    leaf.h = 0; leaf.vx = 0; leaf.vy = 0; leaf.vz = 0;
+                    for (let k = 0; k < 80; k++) {
+                        leaf.x = rand(0.03, 0.97) * w;
+                        leaf.y = rand(0.03, 0.97) * h;
+                        if (this._leafClear(leaf))
+                            break;
+                    }
+                    this.leaves.push(leaf);
+                }
+            });
+        }
+
+        // dọn nốt chỗ chồng lấn còn sót
+        for (let i = 0; i < 8; i++)
+            this._resolveFloating();
     }
 
     // ───── Rải chỗ ban đầu ─────
@@ -2858,13 +3012,13 @@ class Pond {
 
 // ───────────── Mỗi màn hình một ao ─────────────
 class PondView {
-    constructor(monitor, index) {
+    constructor(monitor, index, snap = null) {
         this.index = index;
         this.monitor = monitor;
         this.scale = 1 / PIXEL_SIZE;
         const w = Math.max(1, Math.round(monitor.width * this.scale));
         const h = Math.max(1, Math.round(monitor.height * this.scale));
-        this.pond = new Pond(w, h, (LAYOUT_SEED + index * 7919) >>> 0);
+        this.pond = new Pond(w, h, (LAYOUT_SEED + index * 7919) >>> 0, snap);
 
         this.area = new St.DrawingArea({
             x: monitor.x,
@@ -3028,7 +3182,7 @@ export default class KoiPondExtension extends Extension {
         this._ensureSeed();
         // số lượng / độ phân giải / bộ nhớ đệm đổi => dựng lại ao; còn lại có hiệu lực ngay
         if (keys.some(k => SETTING_ROWS.get(k)?.structural))
-            this._rebuild();
+            this._rebuild(!keys.includes('layout-seed'));   // đổi seed = muốn bố cục mới, không giữ trạng thái cũ
         if (keys.includes('fps-max'))
             this._startTimer();
     }
@@ -3066,10 +3220,10 @@ export default class KoiPondExtension extends Extension {
     }
 
     // ── dựng / dọn ──
-    _buildViews() {
+    _buildViews(snaps = null) {
         const group = Main.layoutManager._backgroundGroup;
         Main.layoutManager.monitors.forEach((monitor, i) => {
-            const view = new PondView(monitor, i);
+            const view = new PondView(monitor, i, snaps?.[i] ?? null);
             group.add_child(view.area);
             this._keepOnTop(group, view.area);
             view.pond.setHour(this._clockHour());
@@ -3090,9 +3244,21 @@ export default class KoiPondExtension extends Extension {
             this._views.length = 0;
     }
 
-    _rebuild() {
+    // keep = true: chụp trạng thái bể cũ rồi áp lại vào bể mới (đổi cài đặt không làm bể xáo trộn)
+    _rebuild(keep = true) {
+        let snaps = null;
+        if (keep) {
+            snaps = (this._views ?? []).map(v => {
+                try {
+                    return v.pond.snapshot();
+                } catch (e) {
+                    logError(e, 'koipond snapshot');
+                    return null;
+                }
+            });
+        }
         this._destroyViews();
-        this._buildViews();
+        this._buildViews(snaps);
         this._attachToExistingBackgrounds();
     }
 
