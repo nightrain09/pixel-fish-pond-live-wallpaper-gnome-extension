@@ -36,7 +36,7 @@
       <default>7</default>
       <range min="0" max="30"/>
       <summary>Koi fish</summary>
-      <description></description>
+      <description>Built-in koi drawn by code. Ignored while custom fish (Koi page) are switched on</description>
     </key>
     <key name="pad-count" type="i">
       <default>6</default>
@@ -375,6 +375,16 @@
       <range min="1" max="50"/>
       <summary>Height at which fish still stir leaves</summary>
       <description>A fish must be this close to the bottom</description>
+    </key>
+    <key name="fish-use-custom" type="b">
+      <default>false</default>
+      <summary>Use custom fish</summary>
+      <description>Use the files in the fish/ folder instead of the built-in koi. Falls back to the built-in koi if the folder is empty</description>
+    </key>
+    <key name="fish-custom-counts" type="s">
+      <default>'{}'</default>
+      <summary>Custom fish counts</summary>
+      <description>JSON {"species/file": count}; edited through the list below</description>
     </key>
     <key name="fish-avoid" type="d">
       <default>3.5</default>

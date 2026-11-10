@@ -15,9 +15,9 @@ const num = v => (Number.isInteger(v) ? String(v) : String(v));
 const keys = [];
 for (const g of SPEC) {
     for (const r of g.rows) {
-        const t = r.type === 'bool' ? 'b' : r.type === 'int' ? 'i' : 'd';
-        const range = r.type === 'bool' ? '' : `\n      <range min="${num(r.min)}" max="${num(r.max)}"/>`;
-        const def = r.type === 'bool' ? String(r.def) : num(r.type === 'double' && Number.isInteger(r.def) ? r.def.toFixed(1) : r.def);
+        const t = r.type === 'bool' ? 'b' : r.type === 'int' ? 'i' : r.type === 'string' ? 's' : 'd';
+        const range = (r.type === 'bool' || r.type === 'string') ? '' : `\n      <range min="${num(r.min)}" max="${num(r.max)}"/>`;
+        const def = r.type === 'string' ? `'${esc(r.def)}'` : r.type === 'bool' ? String(r.def) : num(r.type === 'double' && Number.isInteger(r.def) ? r.def.toFixed(1) : r.def);
         keys.push(`    <key name="${r.key}" type="${t}">
       <default>${def}</default>${range}
       <summary>${esc(r.title)}</summary>

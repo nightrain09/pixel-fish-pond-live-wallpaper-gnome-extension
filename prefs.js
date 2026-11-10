@@ -3,11 +3,13 @@
 
 import Adw from 'gi://Adw';
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
 
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 import {SCHEMA_ID, SPEC} from './settings-spec.js';
+import {FISH_DIR, scanFishDir, parseCounts, DEFAULT_COUNT, MAX_PER_FILE} from './fish-files.js';
 
 export default class KoiPondPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
@@ -27,13 +29,15 @@ export default class KoiPondPreferences extends ExtensionPreferences {
             });
             const rows = new Map();
             for (const r of g.rows) {
+                if (r.hidden)
+                    continue;
                 const row = this._makeRow(settings, r);
                 rows.set(r.key, row);
                 group.add(row);
             }
             // rows that depend on a switch are greyed out while it is off
             for (const r of g.rows) {
-                if (r.dependsOn)
+                if (r.dependsOn && !r.hidden)
                     settings.bind(r.dependsOn, rows.get(r.key), 'sensitive', Gio.SettingsBindFlags.GET);
             }
             if (g.id === 'scene') {
@@ -48,6 +52,8 @@ export default class KoiPondPreferences extends ExtensionPreferences {
                 group.add(rollRow);
             }
             page.add(group);
+            if (g.id === 'fish')
+                page.add(this._makeCustomFishGroup(settings));
 
             const resetGroup = new Adw.PreferencesGroup();
             const btn = new Gtk.Button({
@@ -65,6 +71,74 @@ export default class KoiPondPreferences extends ExtensionPreferences {
 
             window.add(page);
         }
+    }
+
+    // Danh sách file trong fish/ kèm ô số lượng cho từng file (ví dụ 2 con ca-chep/cachep1)
+    _makeCustomFishGroup(settings) {
+        const dir = GLib.build_filenamev([this.path, FISH_DIR]);
+        const group = new Adw.PreferencesGroup({
+            title: 'Custom fish files',
+            description: 'Put .png (top-down picture, head to the right) or .json (skeleton parameters) files ' +
+                'into fish/<species>/ next to the extension, for example fish/koi/koi1.png. ' +
+                'Set how many of each file swim in the pond; 0 = skip it.',
+        });
+
+        const actions = new Gtk.Box({orientation: Gtk.Orientation.HORIZONTAL, spacing: 6});
+        const rescan = new Gtk.Button({label: 'Rescan', valign: Gtk.Align.CENTER});
+        const open = new Gtk.Button({label: 'Open folder', valign: Gtk.Align.CENTER});
+        actions.append(rescan);
+        actions.append(open);
+        group.set_header_suffix(actions);
+
+        let rows = [];
+        const refill = () => {
+            for (const r of rows)
+                group.remove(r);
+            rows = [];
+            let entries = [];
+            try {
+                entries = scanFishDir(dir);
+            } catch (e) {
+                logError(e, 'koipond scan fish/');
+            }
+            if (!entries.length) {
+                const empty = new Adw.ActionRow({
+                    title: 'No fish files found',
+                    subtitle: `Add files to ${dir}, then press Rescan`,
+                });
+                group.add(empty);
+                rows.push(empty);
+            }
+            for (const e of entries) {
+                const kind = e.png ? 'PNG picture bent along the skeleton' : 'JSON skeleton, drawn by code';
+                const counts = parseCounts(settings.get_string('fish-custom-counts'));
+                const adj = new Gtk.Adjustment({
+                    lower: 0, upper: MAX_PER_FILE, step_increment: 1, page_increment: 5,
+                    value: Math.max(0, Math.min(MAX_PER_FILE, counts[e.id] ?? DEFAULT_COUNT)),
+                });
+                const row = new Adw.SpinRow({title: e.id, subtitle: kind, adjustment: adj, digits: 0});
+                row.connect('notify::value', () => {
+                    const cur = parseCounts(settings.get_string('fish-custom-counts'));
+                    cur[e.id] = Math.round(row.value);
+                    settings.set_string('fish-custom-counts', JSON.stringify(cur));
+                });
+                settings.bind('fish-use-custom', row, 'sensitive', Gio.SettingsBindFlags.GET);
+                group.add(row);
+                rows.push(row);
+            }
+        };
+        rescan.connect('clicked', refill);
+        open.connect('clicked', () => {
+            try {
+                const f = Gio.File.new_for_path(dir);
+                try { f.make_directory_with_parents(null); } catch (_e) { /* đã có */ }
+                Gio.AppInfo.launch_default_for_uri(f.get_uri(), null);
+            } catch (e) {
+                logError(e, 'koipond open fish/');
+            }
+        });
+        refill();
+        return group;
     }
 
     _makeRow(settings, r) {

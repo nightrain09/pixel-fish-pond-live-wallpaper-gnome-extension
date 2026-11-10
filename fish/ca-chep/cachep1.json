@@ -1,0 +1,10 @@
+{
+  "_comment": "Tuỳ chọn cho cachep1.png (cùng tên). Tất cả đều không bắt buộc.",
+  "facing": "right",
+  "length": 6.4,
+  "headOffset": 0.5,
+  "size": [15, 22],
+  "speed": [36, 54],
+  "strips": 16,
+  "tailSwing": 0.35
+}

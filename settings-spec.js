@@ -15,6 +15,9 @@ const D = (key, name, title, sub, def, min, max, step = 0.1, digits = 2, extra =
     ({key, name, type: 'double', title, sub, def, min, max, step, digits, ...extra});
 const B = (key, name, title, sub, def, extra = {}) =>
     ({key, name, type: 'bool', title, sub, def, ...extra});
+// chuỗi: không có hàng riêng trong prefs nếu hidden (prefs.js tự dựng giao diện cho nó)
+const S = (key, name, title, sub, def, extra = {}) =>
+    ({key, name, type: 'string', title, sub, def, ...extra});
 
 export const SPEC = [
     {
@@ -32,7 +35,7 @@ export const SPEC = [
         id: 'scene', title: 'Scene', icon: 'applications-science-symbolic',
         desc: 'How many of each object are in the pond. Changing a count rebuilds the pond.',
         rows: [
-            I('fish-count', 'FISH_COUNT', 'Koi fish', '', 7, 0, 30, 1, {structural: true}),
+            I('fish-count', 'FISH_COUNT', 'Koi fish', 'Built-in koi drawn by code. Ignored while custom fish (Koi page) are switched on', 7, 0, 30, 1, {structural: true}),
             I('pad-count', 'PAD_COUNT', 'Lily pads', '', 6, 0, 20, 1, {structural: true}),
             I('leaf-count', 'LEAF_COUNT', 'Fallen leaves', 'Small leaves drifting on the water surface', 9, 0, 40, 1, {structural: true}),
             I('weed-count', 'WEED_COUNT', 'Weed clusters', 'Waterweed on the bottom', 7, 0, 30, 1, {structural: true}),
@@ -125,8 +128,10 @@ export const SPEC = [
     },
     {
         id: 'fish', title: 'Koi', icon: 'emblem-favorite-symbolic',
-        desc: 'Fish behaviour.',
+        desc: 'Fish behaviour and custom fish.',
         rows: [
+            B('fish-use-custom', 'FISH_USE_CUSTOM', 'Use custom fish', 'Use the files in the fish/ folder instead of the built-in koi. Falls back to the built-in koi if the folder is empty', false, {structural: true}),
+            S('fish-custom-counts', 'FISH_CUSTOM_COUNTS', 'Custom fish counts', 'JSON {"species/file": count}; edited through the list below', '{}', {structural: true, hidden: true}),
             D('fish-avoid', 'FISH_AVOID', 'Avoidance look-ahead', 'Multiple of body length; 0 = no avoidance', 3.5, 0, 8, 0.1),
             I('fish-act-min', 'FISH_ACT_MIN', 'Behaviour change: shortest', 'Seconds', 10, 2, 60),
             I('fish-act-max', 'FISH_ACT_MAX', 'Behaviour change: longest', 'Seconds', 24, 2, 120),

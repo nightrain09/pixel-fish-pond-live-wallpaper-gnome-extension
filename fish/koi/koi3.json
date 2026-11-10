@@ -1,0 +1,12 @@
+{
+  "_comment": "Cá vẽ bằng code theo thông số khung xương (không cần ảnh). Màu: '#rrggbb' hoặc [r,g,b].",
+  "size": [16, 22],
+  "speed": [40, 58],
+  "spacing": 0.55,
+  "profile": [0.50, 0.60, 0.62, 0.58, 0.50, 0.40, 0.30, 0.22, 0.15],
+  "colors": ["#1f1f24", "#fa8026"],
+  "accentChance": 0.45,
+  "tail": {"length": 1.6, "spread": 0.5, "alpha": 0.6},
+  "fins": {"size": 0.55, "width": 0.2, "alpha": 0.55},
+  "eye": 0.07
+}

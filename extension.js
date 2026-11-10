@@ -13,6 +13,7 @@ import * as Workspace from 'resource:///org/gnome/shell/ui/workspace.js';
 import * as WindowPreview from 'resource:///org/gnome/shell/ui/windowPreview.js';
 
 import {SCHEMA_ID, SPEC} from './settings-spec.js';
+import {FISH_DIR, scanFishDir, parseCounts, DEFAULT_COUNT, MAX_PER_FILE} from './fish-files.js';
 
 // ───────────── Giá trị mặc định ─────────────
 // Các giá trị dưới đây chỉ là mặc định. Chỉnh trong hộp Cài đặt của extension (prefs);
@@ -22,6 +23,8 @@ let FPS_MAX = 40;          // FPS vẽ khi đang kéo, hoặc lá / sóng đang 
 let ACTIVE_SPEED = 40;     // lá trôi nhanh cỡ này (px ao/giây, x u) thì chạy FPS_MAX
 let PIXEL_SIZE = 4;        // mỗi "pixel" = N pixel màn hình (3 = mịn hơn, 6 = thô hơn)
 let FISH_COUNT = 7;
+let FISH_USE_CUSTOM = false;     // true = dùng file trong fish/ thay cho cá vẽ bằng code
+let FISH_CUSTOM_COUNTS = '{}';   // JSON {"loài/file": số con}
 let PAD_COUNT = 6;         // số lá sen
 let RIPPLE_LIFE = 3.4;     // giây
 
@@ -178,6 +181,8 @@ const SETTERS = {
     'leaf-bed-kick': v => { LEAF_BED_KICK = v; },
     'leaf-bed-damp': v => { LEAF_BED_DAMP = v; },
     'fish-bed-z': v => { FISH_BED_Z = v; },
+    'fish-use-custom': v => { FISH_USE_CUSTOM = v; },
+    'fish-custom-counts': v => { FISH_CUSTOM_COUNTS = v; },
     'fish-avoid': v => { FISH_AVOID = v; },
     'fish-act-min': v => { FISH_ACT_MIN = v; },
     'fish-act-max': v => { FISH_ACT_MAX = v; },
@@ -214,7 +219,8 @@ function applySettings(settings) {
     for (const [key, r] of SETTING_ROWS) {
         const v = r.type === 'bool' ? settings.get_boolean(key)
             : r.type === 'int' ? settings.get_int(key)
-                : settings.get_double(key);
+                : r.type === 'string' ? settings.get_string(key)
+                    : settings.get_double(key);
         (SETTERS[key] ?? SPECIAL[key])?.(v);
     }
     TIME_OVERRIDE = SP.timeEn ? SP.timeHr : null;
@@ -229,6 +235,7 @@ function applySettings(settings) {
     WAVE_C2 = Math.min(WAVE_C2, 0.49);
     PHYS_DT = 1 / WAVE_STEP_RATE;
     _frameCache.clear();
+    FISH_ROSTER = FISH_USE_CUSTOM ? buildFishRoster() : [];
 }
 
 let ASSET_DIR = null;            // thư mục extension, gán trong enable()
@@ -470,6 +477,191 @@ function lightAt(hour) {
     };
 }
 
+// ───────────── Cá tuỳ chỉnh (thư mục fish/) ─────────────
+// Mỗi file trong fish/<loài>/ là một "khung xương" của một kiểu cá:
+//  • .png  : ảnh cá nhìn từ trên xuống. Ảnh được cắt thành các lát dọc thân rồi uốn theo chuỗi đốt xương sống
+//            của cá => bơi uốn lượn, có bóng, va chạm, né nhau như cá vẽ bằng code.
+//  • .json : thông số của xương sống (độ to từng đốt, màu, đuôi, vây...) => vẫn vẽ bằng code nhưng theo thông số này.
+//  • .png + .json cùng tên: JSON là tuỳ chọn cho ảnh (length, headOffset, facing, size...).
+// Xem README.md để biết đầy đủ các trường.
+const MAX_CUSTOM_FISH = 60;
+let FISH_ROSTER = [];                // mỗi phần tử = định nghĩa cá của một con (cùng file => cùng đối tượng)
+const _fishDefCache = new Map();     // id file => {sig, def}
+
+const _jnum = (v, d, lo, hi) => (typeof v === 'number' && Number.isFinite(v)) ? Math.max(lo, Math.min(hi, v)) : d;
+
+function _jrange(v, d, lo, hi) {
+    if (typeof v === 'number' && Number.isFinite(v))
+        return [Math.max(lo, Math.min(hi, v)), Math.max(lo, Math.min(hi, v))];
+    if (Array.isArray(v) && v.length >= 2 && typeof v[0] === 'number' && typeof v[1] === 'number') {
+        const a = Math.max(lo, Math.min(hi, v[0])), b = Math.max(lo, Math.min(hi, v[1]));
+        return [Math.min(a, b), Math.max(a, b)];
+    }
+    return d;
+}
+
+// '#rrggbb' | '#rgb' | [r, g, b] (0..1 hoặc 0..255) => [r, g, b] 0..1, hoặc null nếu không hợp lệ
+function _jcolor(v) {
+    if (typeof v === 'string') {
+        let h = v.trim().replace(/^#/, '');
+        if (h.length === 3)
+            h = h.split('').map(c => c + c).join('');
+        if (!/^[0-9a-fA-F]{6}$/.test(h))
+            return null;
+        return [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
+    }
+    if (Array.isArray(v) && v.length >= 3 && v.slice(0, 3).every(x => typeof x === 'number')) {
+        const big = v.slice(0, 3).some(x => x > 1);
+        return v.slice(0, 3).map(x => Math.max(0, Math.min(1, big ? x / 255 : x)));
+    }
+    return null;
+}
+
+// Co giãn mảng bán kính thân về đúng nseg đốt
+function _resampleProfile(arr, nseg) {
+    if (!Array.isArray(arr) || arr.length < 2 || !arr.every(x => typeof x === 'number' && Number.isFinite(x)))
+        arr = PROFILE;
+    return Array.from({length: nseg}, (_, i) => {
+        const pos = i * (arr.length - 1) / (nseg - 1);
+        const k = Math.min(arr.length - 2, Math.floor(pos));
+        const v = arr[k] + (arr[k + 1] - arr[k]) * (pos - k);
+        return Math.max(0.03, Math.min(2, v));
+    });
+}
+
+// Xoay / lật ảnh về hướng nội bộ (đầu ở mép trái). facing = hướng đầu cá trong ảnh gốc.
+function _orientSprite(src, facing, flip) {
+    // Thuật toán uốn ảnh coi ĐẦU cá nằm ở mép TRÁI ảnh, nên ảnh khai báo "đầu quay sang phải" (mặc định) phải xoay 180°
+    const turn = {left: 0, right: Math.PI, up: -Math.PI / 2, down: Math.PI / 2}[facing] ?? Math.PI;
+    if (turn === 0 && !flip)
+        return src;
+    const w = src.getWidth(), h = src.getHeight();
+    const quarter = Math.abs(Math.abs(turn) - Math.PI / 2) < 1e-6;
+    const W = quarter ? h : w, H = quarter ? w : h;
+    const out = new Cairo.ImageSurface(Cairo.Format.ARGB32, W, H);
+    const cc = new Cairo.Context(out);
+    cc.translate(W / 2, H / 2);
+    if (flip)
+        cc.scale(1, -1);
+    cc.rotate(turn);
+    cc.translate(-w / 2, -h / 2);
+    cc.setSourceSurface(src, 0, 0);
+    cc.paint();
+    cc.$dispose();
+    return out;
+}
+
+function _readJson(path) {
+    const [ok, bytes] = GLib.file_get_contents(path);
+    if (!ok)
+        throw new Error('không đọc được file');
+    const o = JSON.parse(new TextDecoder().decode(bytes));
+    if (!o || typeof o !== 'object' || Array.isArray(o))
+        throw new Error('JSON phải là một object {...}');
+    return o;
+}
+
+function loadFishDef(e) {
+    let o = {};
+    if (e.json) {
+        try {
+            o = _readJson(e.json);
+        } catch (err) {
+            log(`koipond: ${e.json}: ${err.message}`);
+            if (!e.png)
+                return null;
+        }
+    }
+    const nseg = Math.round(_jnum(o.segments, SEG, 4, 40));      // số đốt xương sống của loài này
+    const wave = (o.wave && typeof o.wave === 'object') ? o.wave : {};
+    const def = {
+        id: e.id,
+        size: _jrange(o.size, [15, 24], 4, 80),
+        speed: _jrange(o.speed, [38, 62], 5, 300),
+        spacing: _jnum(o.spacing, 0.55, 0.1, 2),
+        nseg,
+        bend: _jnum(o.bend, FISH_BEND, 0.05, 1.2),               // rad: mỗi khớp gập tối đa
+        waveAmp: _jnum(wave.amplitude, 0.10, 0, 1),              // biên độ sóng trườn (x size)
+        waveStep: _jnum(wave.step, 0.8, 0, 3),                   // lệch pha giữa hai đốt liền nhau (nhỏ = sóng dài)
+        waveSpeed: _jnum(wave.speed, 1, 0.1, 5),                 // nhân tốc độ chạy của sóng
+        profile: _resampleProfile(o.profile, nseg),
+    };
+
+    if (e.png) {
+        let img = null;
+        try {
+            img = Cairo.ImageSurface.createFromPNG(e.png);
+            if (!img.getWidth() || !img.getHeight())
+                img = null;
+        } catch (err) {
+            log(`koipond: ${e.png}: ${err.message}`);
+        }
+        if (!img)
+            return null;
+        def.kind = 'sprite';
+        def.img = _orientSprite(img, String(o.facing ?? 'right').toLowerCase(), !!o.flip);
+        def.length = _jnum(o.length, 6.4, 2, 60);          // tổng chiều dài ảnh = bấy nhiêu lần "size" của cá
+        def.headOff = _jnum(o.headOffset, 0.5, 0, 3);      // mũi cá nhô ra trước đốt đầu bấy nhiêu (x size)
+        def.strips = Math.round(_jnum(o.strips, 16, 3, 64));   // số lát cắt ảnh dọc thân
+        def.tailSwing = _jnum(o.tailSwing, 0.35, 0, 1.5);  // độ ngoe nguẩy của phần đuôi
+        return def;
+    }
+
+    def.kind = 'skeleton';
+    const cols = Array.isArray(o.colors) ? o.colors.map(_jcolor).filter(Boolean) : [];
+    def.colors = cols.length ? cols : null;                 // null = dùng PALETTES theo chỉ số
+    def.accentChance = _jnum(o.accentChance, 0.4, 0, 1);
+    def.segColors = Array.isArray(o.segmentColors) ? o.segmentColors : null;   // chỉ số màu cho từng đốt
+    const tail = (o.tail && typeof o.tail === 'object') ? o.tail : {};
+    def.tailLen = _jnum(tail.length, 1.5, 0.2, 4);
+    def.tailSpread = _jnum(tail.spread, 0.5, 0, 1.5);
+    def.tailAlpha = _jnum(tail.alpha, 0.6, 0, 1);
+    const fins = (o.fins && typeof o.fins === 'object') ? o.fins : {};
+    def.finSize = _jnum(fins.size, 0.55, 0, 2);
+    def.finWidth = _jnum(fins.width, 0.2, 0.02, 1);
+    def.finAlpha = _jnum(fins.alpha, 0.55, 0, 1);
+    def.eye = _jnum(o.eye, 0.07, 0, 0.3);
+    return def;
+}
+
+function getFishDef(e) {
+    const c = _fishDefCache.get(e.id);
+    if (c && c.sig === e.sig)
+        return c.def;
+    let def = null;
+    try {
+        def = loadFishDef(e);
+    } catch (err) {
+        logError(err, `koipond fish ${e.id}`);
+    }
+    _fishDefCache.set(e.id, {sig: e.sig, def});
+    return def;
+}
+
+// Quét fish/ và nhân mỗi file theo số con người dùng chọn (mặc định 1 con / file)
+function buildFishRoster() {
+    let entries = [];
+    try {
+        entries = scanFishDir(GLib.build_filenamev([ASSET_DIR, FISH_DIR]));
+    } catch (err) {
+        logError(err, 'koipond scan fish/');
+    }
+    const counts = parseCounts(FISH_CUSTOM_COUNTS);
+    const roster = [];
+    for (const e of entries) {
+        const raw = counts[e.id];
+        const n = Number.isFinite(raw) ? Math.max(0, Math.min(MAX_PER_FILE, Math.round(raw))) : DEFAULT_COUNT;
+        if (n <= 0)
+            continue;
+        const def = getFishDef(e);
+        if (!def)
+            continue;
+        for (let i = 0; i < n; i++)
+            roster.push(def);
+    }
+    return roster.slice(0, MAX_CUSTOM_FISH);
+}
+
 // ───────────── Cá koi ─────────────
 const SEG = 9;
 const PROFILE = [0.50, 0.60, 0.62, 0.58, 0.50, 0.40, 0.30, 0.22, 0.15];
@@ -502,17 +694,17 @@ const RING_SIN = Array.from({length: RING_N}, (_, k) => Math.sin(k * TAU / RING_
 // Điểm thân của hai con cá chồng nhau sâu nhất (chỉ xét trên mặt phẳng ao).
 // Trả về {pen, nx, ny} (pen > 0 = đang chồng nhau; n hướng từ a sang b) hoặc null nếu ở quá xa.
 function fishContact(a, b) {
-    const reach = a.spacing * (SEG - 1) + a.size + b.spacing * (SEG - 1) + b.size;
+    const reach = a.spacing * (a.nseg - 1) + a.size + b.spacing * (b.nseg - 1) + b.size;
     if (Math.hypot(a.x - b.x, a.y - b.y) > reach)
         return null;
     let best = null;
-    for (let i = 0; i < SEG; i++) {
-        const p = a.segs[i], ra = a.size * PROFILE[i] * FISH_HIT;
-        for (let j = 0; j < SEG; j++) {
+    for (let i = 0; i < a.nseg; i++) {
+        const p = a.segs[i], ra = a.size * a.profile[i] * FISH_HIT;
+        for (let j = 0; j < b.nseg; j++) {
             const q = b.segs[j];
             const dx = q.x - p.x, dy = q.y - p.y;
             const d = Math.hypot(dx, dy);
-            const pen = ra + b.size * PROFILE[j] * FISH_HIT - d;
+            const pen = ra + b.size * b.profile[j] * FISH_HIT - d;
             if (!best || pen > best.pen) {
                 if (d > 1e-6)
                     best = {pen, nx: dx / d, ny: dy / d};
@@ -525,18 +717,37 @@ function fishContact(a, b) {
 }
 
 class Fish {
-    constructor(pond, index) {
+    constructor(pond, index, def = null) {
         this.pond = pond;
+        this.def = def;      // null = cá koi vẽ bằng code mặc định
         const u = pond.u;
-        this.size = rand(15, 24) * u;
+        const sr = def ? def.size : [15, 24];
+        const br = def ? def.speed : [38, 62];
+        // dùng lại các hàm rand cũ theo đúng thứ tự => cá mặc định không đổi bố cục so với trước
+        this.size = rand(sr[0], sr[1]) * u;
         this.x = rand(0.1, 0.9) * pond.w;
         this.y = rand(0.1, 0.9) * pond.h;
         this.angle = rand(0, TAU);
-        this.base = rand(38, 62) * u;
+        this.base = rand(br[0], br[1]) * u;
         this.speed = this.base;
         this.turn = 0;
         this.phase = rand(0, TAU);
-        this.spacing = this.size * 0.55;
+        this.spacingK = def ? def.spacing : 0.55;
+        this.spacing = this.size * this.spacingK;
+        this.profile = def ? def.profile : PROFILE;
+        this.nseg = def ? def.nseg : SEG;
+        this.bend = def ? def.bend : FISH_BEND;
+        this.waveAmp = def ? def.waveAmp : 0.10;
+        this.waveStep = def ? def.waveStep : 0.8;
+        this.waveSpeed = def ? def.waveSpeed : 1;
+        // hình dạng khi vẽ bằng code (JSON có thể đổi các thông số này)
+        this.tailLen = def?.tailLen ?? 1.5;
+        this.tailSpread = def?.tailSpread ?? 0.5;
+        this.tailAlpha = def?.tailAlpha ?? 0.6;
+        this.finSize = def?.finSize ?? 0.55;
+        this.finWidth = def?.finWidth ?? 0.2;
+        this.finAlpha = def?.finAlpha ?? 0.55;
+        this.eyeSize = def?.eye ?? 0.07;
         // chiều cao: thân cá chiếm khoảng độ cao [zBase, zBase + zH] tính từ đáy ao
         this.zH = this.size * FISH_THICK;
         this.zBase = rand(0, Math.max(0, FISH_DEPTH * u - this.zH));
@@ -546,10 +757,17 @@ class Fish {
         this.action = null;
         this.turnTarget = 0;
 
-        const pal = PALETTES[index % PALETTES.length];
-        this.colors = Array.from({length: SEG}, (_, k) =>
-            (k > 0 && _rng() < 0.4) ? pal[1] : pal[0]);
-        this.segs = Array.from({length: SEG}, (_, k) => ({
+        const pal = def?.colors ?? PALETTES[index % PALETTES.length];
+        const acc = def?.accentChance ?? 0.4;
+        this.colors = Array.from({length: this.nseg}, (_, k) => {
+            const r = (k > 0 && _rng() < acc);
+            if (def?.segColors) {
+                const c = pal[Math.max(0, Math.min(pal.length - 1, Math.round(def.segColors[k] ?? 0)))];
+                return c ?? pal[0];
+            }
+            return r ? (pal[1] ?? pal[0]) : pal[0];
+        });
+        this.segs = Array.from({length: this.nseg}, (_, k) => ({
             x: this.x - Math.cos(this.angle) * k * this.spacing,
             y: this.y - Math.sin(this.angle) * k * this.spacing,
         }));
@@ -615,7 +833,7 @@ class Fish {
         // giới hạn tốc độ quay đầu (trước khi bơi tiếp)
         this.angle = a0 + clamp(angDiff(a0, this.angle), -FISH_TURN * dt, FISH_TURN * dt);
 
-        this.phase += dt * (3 + (this.speed / this.base) * 3);
+        this.phase += dt * (3 + (this.speed / this.base) * 3) * this.waveSpeed;
         this.x = clamp(this.x + Math.cos(this.angle) * this.speed * dt, -30 * u, p.w + 30 * u);
         this.y = clamp(this.y + Math.sin(this.angle) * this.speed * dt, -30 * u, p.h + 30 * u);
 
@@ -632,11 +850,11 @@ class Fish {
         s[0].x = this.x;
         s[0].y = this.y;
         let pdir = Math.atan2(s[1].y - s[0].y, s[1].x - s[0].x);
-        for (let i = 1; i < SEG; i++) {
+        for (let i = 1; i < this.nseg; i++) {
             const a = s[i - 1], b = s[i];
             const dx = b.x - a.x, dy = b.y - a.y;
             const d = Math.hypot(dx, dy) || 1;
-            pdir += clamp(angDiff(pdir, Math.atan2(dy, dx)), -FISH_BEND, FISH_BEND);
+            pdir += clamp(angDiff(pdir, Math.atan2(dy, dx)), -this.bend, this.bend);
             b.x = a.x + Math.cos(pdir) * this.spacing;
             b.y = a.y + Math.sin(pdir) * this.spacing;
         }
@@ -763,6 +981,102 @@ class Fish {
         }
     }
 
+    // Uốn ảnh PNG theo xương sống: ảnh (đầu quay sang phải) được cắt thành các lát dọc thân; mỗi lát được
+    // đặt vào đúng điểm trên đường "mũi đầu -> các đốt -> đuôi kéo dài" và xoay theo hướng của đường tại đó.
+    _drawSprite(cr, shadow, pts, dk) {
+        const d = this.def, img = d.img;
+        const iw = img.getWidth(), ih = img.getHeight();
+        const n = this.nseg - 1, size = this.size;
+
+        // đường dẫn: mũi đầu, các đốt, rồi phần đuôi kéo dài có ngoe nguẩy
+        const path = [];
+        let hx = pts[0][0] - pts[1][0], hy = pts[0][1] - pts[1][1];
+        const hl = Math.hypot(hx, hy) || 1;
+        hx /= hl; hy /= hl;
+        path.push([pts[0][0] + hx * d.headOff * size, pts[0][1] + hy * d.headOff * size]);
+        for (const q of pts)
+            path.push(q);
+        const [tx, ty] = pts[n];
+        let dx = tx - pts[n - 1][0], dy = ty - pts[n - 1][1];
+        const dl = Math.hypot(dx, dy) || 1;
+        dx /= dl; dy /= dl;
+        const nx = -dy, ny = dx;
+        const nominal = Math.max(d.length * size, d.headOff * size + this.spacing * n + 0.2 * size);
+        const tailLen = Math.max(0.2 * size, nominal - d.headOff * size - this.spacing * n);
+        const TS = 4;
+        for (let k = 1; k <= TS; k++) {
+            const f = k / TS;
+            const sw = Math.sin(this.phase - n * this.waveStep + 1 - f * 1.2) * d.tailSwing * f * f * tailLen;
+            path.push([tx + dx * tailLen * f + nx * sw, ty + dy * tailLen * f + ny * sw]);
+        }
+        const cum = [0];
+        for (let i = 1; i < path.length; i++)
+            cum.push(cum[i - 1] + Math.hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]));
+
+        // điểm + góc tại độ dài cung a (ngoài hai đầu thì kéo dài đoạn đầu / đoạn cuối)
+        let seg = 0;
+        const at = a => {
+            while (seg > 0 && a < cum[seg])
+                seg--;
+            while (seg < path.length - 2 && a > cum[seg + 1])
+                seg++;
+            const p0 = path[seg], p1 = path[seg + 1];
+            const len = (cum[seg + 1] - cum[seg]) || 1;
+            const t = (a - cum[seg]) / len;
+            return [p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t,
+                Math.atan2(p1[1] - p0[1], p1[0] - p0[0])];
+        };
+
+        const sc = nominal / iw;                        // 1 pixel ảnh = sc pixel ao
+        const ns = Math.max(3, Math.min(d.strips, Math.floor(iw / 2)));
+        const ov = 0.8 / sc;                            // lát chồng nhau ~0.8 pixel ao để khỏi hở khe khi thân cong
+        const half = ih * sc / 2 + 2;
+
+        // vùng chứa cá: nhóm vẽ tạm chỉ cần cỡ này
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (const q of path) {
+            x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]);
+            x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]);
+        }
+        x0 = Math.floor(x0 - half - 2); y0 = Math.floor(y0 - half - 2);
+        x1 = Math.ceil(x1 + half + 2); y1 = Math.ceil(y1 + half + 2);
+
+        cr.save();
+        cr.rectangle(x0, y0, x1 - x0, y1 - y0);
+        cr.clip();
+        cr.pushGroup();
+        for (let k = 0; k < ns; k++) {
+            const sx0 = k * iw / ns, sx1 = (k + 1) * iw / ns, xm = (sx0 + sx1) / 2;
+            const [px, py, ang] = at(xm * sc);
+            cr.save();
+            cr.translate(px, py);
+            cr.rotate(ang);
+            cr.scale(sc, sc);
+            cr.translate(-xm, -ih / 2);
+            cr.setOperator(Cairo.Operator.SOURCE);     // lát sau thay hẳn lát trước ở chỗ chồng nhau (không bị đậm đôi ở phần bán trong suốt)
+            cr.rectangle(sx0 - (k > 0 ? ov : 0), 0, sx1 - sx0 + (k > 0 ? ov : 0) + (k < ns - 1 ? ov : 0), ih);
+            cr.clip();
+            if (shadow) {
+                cr.setSourceRGBA(0, 0.03, 0.06, 1);
+                cr.maskSurface(img, 0, 0);
+            } else {
+                cr.setSourceSurface(img, 0, 0);
+                cr.paint();
+            }
+            cr.restore();
+        }
+        if (!shadow && dk > 0) {
+            // cá ở sâu thì tối / xanh hơn: phủ màu nước sâu lên đúng phần có cá
+            cr.setOperator(Cairo.Operator.ATOP);
+            cr.setSourceRGBA(FISH_DEEP[0], FISH_DEEP[1], FISH_DEEP[2], dk);
+            cr.paint();
+            cr.setOperator(Cairo.Operator.OVER);
+        }
+        cr.popGroupToSource();
+        cr.paintWithAlpha(shadow ? 0.14 : 0.97);
+        cr.restore();
+    }
+
     draw(cr, shadow) {
         const u = this.pond.u;
         // 0 = sát đáy, 1 = sát mặt nước: cá càng cao thì bóng trên đáy càng lệch xa, thân càng sáng
@@ -771,7 +1085,7 @@ class Fish {
         const ox = shadow ? 7 * u * sk : 0;
         const oy = shadow ? 10 * u * sk : 0;
         const dk = FISH_DEPTH_TINT * (1 - zk);
-        const n = SEG - 1;
+        const n = this.nseg - 1;
         const segs = this.segs;
 
         const pts = segs.map((q, i) => {
@@ -782,7 +1096,7 @@ class Fish {
             let ax = -(b.y - a.y), ay = b.x - a.x;
             const al = Math.hypot(ax, ay) || 1;
             ax /= al; ay /= al;
-            const w = Math.sin(this.phase - i * 0.8) * this.size * 0.10 * (i / n);
+            const w = Math.sin(this.phase - i * this.waveStep) * this.size * this.waveAmp * (i / n);
             return [q.x + ax * w + ox, q.y + ay * w + oy];
         });
 
@@ -797,6 +1111,12 @@ class Fish {
             }
         };
 
+        // cá dùng ảnh PNG: uốn ảnh theo xương sống rồi thôi
+        if (this.def?.kind === 'sprite') {
+            this._drawSprite(cr, shadow, pts, dk);
+            return;
+        }
+
         // đuôi
         const [tx, ty] = pts[n];
         const [bx, by] = pts[n - 1];
@@ -804,20 +1124,20 @@ class Fish {
         const dl = Math.hypot(dx, dy) || 1;
         dx /= dl; dy /= dl;
         const nx = -dy, ny = dx;
-        const sw = Math.sin(this.phase - n * 0.8 + 1) * 0.5;
-        const L = this.size * 1.5;
+        const sw = Math.sin(this.phase - n * this.waveStep + 1) * this.tailSpread;
+        const L = this.size * this.tailLen;
         cr.newPath();
         cr.moveTo(tx, ty);
         cr.curveTo(
-            tx + dx * L * 0.5 + nx * L * (0.5 + sw), ty + dy * L * 0.5 + ny * L * (0.5 + sw),
+            tx + dx * L * 0.5 + nx * L * (this.tailSpread + sw), ty + dy * L * 0.5 + ny * L * (this.tailSpread + sw),
             tx + dx * L + nx * L * (0.35 + sw), ty + dy * L + ny * L * (0.35 + sw),
             tx + dx * L * 0.8 + nx * sw * L * 0.2, ty + dy * L * 0.8 + ny * sw * L * 0.2);
         cr.curveTo(
             tx + dx * L + nx * L * (-0.35 + sw), ty + dy * L + ny * L * (-0.35 + sw),
-            tx + dx * L * 0.5 - nx * L * (0.5 - sw), ty + dy * L * 0.5 - ny * L * (0.5 - sw),
+            tx + dx * L * 0.5 - nx * L * (this.tailSpread - sw), ty + dy * L * 0.5 - ny * L * (this.tailSpread - sw),
             tx, ty);
         cr.closePath();
-        col(this.colors[n], 0.6);
+        col(this.colors[n], this.tailAlpha);
         cr.fill();
 
         // vây ngực
@@ -827,26 +1147,26 @@ class Fish {
         for (const side of [-1, 1]) {
             cr.newPath();
             cr.save();
-            cr.translate(pts[2][0] - hy * side * this.size * 0.55,
-                pts[2][1] + hx * side * this.size * 0.55);
+            cr.translate(pts[2][0] - hy * side * this.size * this.finSize,
+                pts[2][1] + hx * side * this.size * this.finSize);
             cr.rotate(Math.atan2(hy, hx) + side * (0.6 + Math.sin(this.phase) * 0.15));
-            cr.scale(this.size * 0.55, this.size * 0.2);
+            cr.scale(this.size * this.finSize, this.size * this.finWidth);
             cr.arc(0, 0, 1, 0, TAU);
             cr.restore();
-            col(this.colors[2], 0.55);
+            col(this.colors[2], this.finAlpha);
             cr.fill();
         }
 
         // thân
         for (let i = n; i >= 0; i--) {
             cr.newPath();
-            cr.arc(pts[i][0], pts[i][1], this.size * PROFILE[i], 0, TAU);
+            cr.arc(pts[i][0], pts[i][1], this.size * this.profile[i], 0, TAU);
             col(this.colors[i], 0.97);
             cr.fill();
         }
 
         // mắt
-        if (!shadow) {
+        if (!shadow && this.eyeSize > 0) {
             let ex = pts[0][0] - pts[1][0], ey = pts[0][1] - pts[1][1];
             const el = Math.hypot(ex, ey) || 1;
             ex /= el; ey /= el;
@@ -854,7 +1174,7 @@ class Fish {
                 cr.newPath();
                 cr.arc(pts[0][0] + ex * this.size * 0.2 - ey * side * this.size * 0.28,
                     pts[0][1] + ey * this.size * 0.2 + ex * side * this.size * 0.28,
-                    Math.max(0.8, this.size * 0.07), 0, TAU);
+                    Math.max(0.8, this.size * this.eyeSize), 0, TAU);
                 cr.setSourceRGBA(0.05, 0.05, 0.05, 0.9);
                 cr.fill();
             }
@@ -1351,13 +1671,13 @@ class Leaf {
         for (const f of p.fish) {
             if (topZ - (f.zBase + f.zH) > LEAF_FISH_TOP * u)
                 continue;       // cá bơi sâu: không chạm được lá trên mặt
-            if (Math.hypot(this.x - f.x, this.y - f.y) > f.spacing * (SEG - 1) + f.size * 1.5 + this.len)
+            if (Math.hypot(this.x - f.x, this.y - f.y) > f.spacing * (f.nseg - 1) + f.size * 1.5 + this.len)
                 continue;
-            for (let i = 0; i < SEG; i++) {
+            for (let i = 0; i < f.nseg; i++) {
                 const q = f.segs[i];
                 const fdx = this.x - q.x, fdy = this.y - q.y;
                 const d = Math.hypot(fdx, fdy);
-                const reach = f.size * PROFILE[i] * 1.2 + this.len * 0.6;
+                const reach = f.size * f.profile[i] * 1.2 + this.len * 0.6;
                 if (d >= reach)
                     continue;
                 const kk = 1 - d / reach;
@@ -1430,14 +1750,14 @@ class Leaf {
             if (f.zBase > zMax)
                 continue;       // cá bơi cao hơn đáy: không chạm được lá
             const zk = 1 - f.zBase / zMax;
-            if (Math.hypot(this.x - f.x, this.y - f.y) > f.spacing * (SEG - 1) + f.size * 1.6 + this.len)
+            if (Math.hypot(this.x - f.x, this.y - f.y) > f.spacing * (f.nseg - 1) + f.size * 1.6 + this.len)
                 continue;
             const fx = Math.cos(f.angle), fy = Math.sin(f.angle);
-            for (let i = 0; i < SEG; i++) {
+            for (let i = 0; i < f.nseg; i++) {
                 const q = f.segs[i];
                 let dx = this.x - q.x, dy = this.y - q.y;
                 const d = Math.hypot(dx, dy);
-                const reach = f.size * PROFILE[i] * 1.5 + this.len * 0.6;
+                const reach = f.size * f.profile[i] * 1.5 + this.len * 0.6;
                 if (d >= reach)
                     continue;
                 if (d > 1e-6) {
@@ -1627,7 +1947,9 @@ class Pond {
         this.h = h;
         this.seed = seed;
         // số lượng lúc dựng (snapshot dùng để biết cần thêm / bớt bao nhiêu vật)
-        this.counts = {fish: FISH_COUNT, pad: PAD_COUNT, leaf: LEAF_COUNT, weed: WEED_COUNT};
+        const roster = FISH_ROSTER.length ? FISH_ROSTER : null;   // cá tuỳ chỉnh (rỗng => cá mặc định)
+        const nFish = roster ? roster.length : FISH_COUNT;
+        this.counts = {fish: nFish, pad: PAD_COUNT, leaf: LEAF_COUNT, weed: WEED_COUNT};
         this.u = w / 960;
         this.t = 0;
         this.ripples = [];
@@ -1636,8 +1958,8 @@ class Pond {
         this.grab = null;            // vật đang bị chuột kéo {obj, ox, oy, x, y}
         // Mỗi loại vật (và mỗi con cá / cụm rong) có luồng ngẫu nhiên riêng theo seed,
         // nên đổi số lượng loại này không làm xáo trộn các loại khác.
-        this.fish = Array.from({length: FISH_COUNT}, (_, i) =>
-            withSeed(hashSeed(seed, 'fish', i), () => new Fish(this, i)));
+        this.fish = Array.from({length: nFish}, (_, i) =>
+            withSeed(hashSeed(seed, 'fish', i), () => new Fish(this, i, roster ? roster[i] : null)));
 
         // rải lá sen sao cho không đè lên nhau ngay từ khung hình đầu
         this.pads = [];
@@ -1752,9 +2074,10 @@ class Pond {
             f.zBase = s.zBase * u; f.zTarget = s.zTarget * u; f.zT = s.zT; f.actT = s.actT;
             f.action = s.action ? {...s.action} : null;
             f.turnTarget = s.turnTarget;
-            f.spacing = f.size * 0.55;
+            f.spacing = f.size * f.spacingK;
             f.zH = f.size * FISH_THICK;
-            f.segs = s.segs.map(([x, y]) => ({x: x * w, y: y * h}));
+            if (s.segs.length === f.nseg)      // loài khác số đốt (đổi file ở vị trí này) thì giữ xương mới dựng
+                f.segs = s.segs.map(([x, y]) => ({x: x * w, y: y * h}));
         }
 
         // lá sen
@@ -3215,6 +3538,8 @@ export default class KoiPondExtension extends Extension {
         this._inj = null;
         _imgCache.clear();
         _frameCache.clear();
+        _fishDefCache.clear();
+        FISH_ROSTER = [];
         this._destroyViews();
         this._views = null;
     }
