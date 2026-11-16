@@ -1,0 +1,446 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Generated from settings-spec.js by tools/gen.mjs. Do not edit by hand. -->
+<schemalist>
+  <schema id="org.gnome.shell.extensions.koipond" path="/org/gnome/shell/extensions/koipond/">
+    <key name="fps-min" type="i">
+      <default>5</default>
+      <range min="1" max="30"/>
+      <summary>Minimum FPS</summary>
+      <description>Used when everything is calm (lower = lighter on the CPU)</description>
+    </key>
+    <key name="fps-max" type="i">
+      <default>40</default>
+      <range min="10" max="60"/>
+      <summary>Maximum FPS</summary>
+      <description>Used while dragging the mouse or when leaves / waves move fast</description>
+    </key>
+    <key name="active-speed" type="i">
+      <default>40</default>
+      <range min="5" max="200"/>
+      <summary>Speed threshold for maximum FPS</summary>
+      <description>Leaves drifting at this speed make the pond run at maximum FPS</description>
+    </key>
+    <key name="pixel-size" type="i">
+      <default>4</default>
+      <range min="2" max="10"/>
+      <summary>Pixel size</summary>
+      <description>Each pixel-art pixel = N screen pixels (smaller = finer but heavier)</description>
+    </key>
+    <key name="water-opacity" type="d">
+      <default>1.0</default>
+      <range min="0" max="1"/>
+      <summary>Water opacity</summary>
+      <description>Below 1 lets the original wallpaper show through</description>
+    </key>
+    <key name="fish-count" type="i">
+      <default>7</default>
+      <range min="0" max="30"/>
+      <summary>Koi fish</summary>
+      <description></description>
+    </key>
+    <key name="pad-count" type="i">
+      <default>6</default>
+      <range min="0" max="20"/>
+      <summary>Lily pads</summary>
+      <description></description>
+    </key>
+    <key name="leaf-count" type="i">
+      <default>9</default>
+      <range min="0" max="40"/>
+      <summary>Fallen leaves</summary>
+      <description>Small leaves drifting on the water surface</description>
+    </key>
+    <key name="weed-count" type="i">
+      <default>7</default>
+      <range min="0" max="30"/>
+      <summary>Weed clusters</summary>
+      <description>Waterweed on the bottom</description>
+    </key>
+    <key name="time-override-enabled" type="b">
+      <default>false</default>
+      <summary>Fix the time</summary>
+      <description>Always show one specific hour (for previewing)</description>
+    </key>
+    <key name="time-override-hour" type="d">
+      <default>18.5</default>
+      <range min="0" max="24"/>
+      <summary>Fixed hour</summary>
+      <description>For example 18.5 = 18:30</description>
+    </key>
+    <key name="time-speed" type="i">
+      <default>1</default>
+      <range min="1" max="3600"/>
+      <summary>Time speed</summary>
+      <description>1 = real time; 600 = a whole day passes in ~2.4 minutes</description>
+    </key>
+    <key name="celestial" type="b">
+      <default>true</default>
+      <summary>Draw sun / moon</summary>
+      <description>When off, only the old glare is used (if enabled below)</description>
+    </key>
+    <key name="sun-size" type="d">
+      <default>0.12</default>
+      <range min="0.02" max="0.4"/>
+      <summary>Sun size</summary>
+      <description>Longest side of the image as a fraction of the screen width</description>
+    </key>
+    <key name="moon-size" type="d">
+      <default>0.09</default>
+      <range min="0.02" max="0.4"/>
+      <summary>Moon size</summary>
+      <description>Same as above, for the moon</description>
+    </key>
+    <key name="celestial-opacity" type="d">
+      <default>1.0</default>
+      <range min="0" max="1"/>
+      <summary>Opacity</summary>
+      <description></description>
+    </key>
+    <key name="celestial-on-top" type="b">
+      <default>true</default>
+      <summary>Keep bright</summary>
+      <description>Not darkened by the time-of-day tint; lily pads and leaves still cover it</description>
+    </key>
+    <key name="glow" type="b">
+      <default>true</default>
+      <summary>Glow</summary>
+      <description></description>
+    </key>
+    <key name="glow-size" type="d">
+      <default>2.6</default>
+      <range min="1" max="6"/>
+      <summary>Glow size</summary>
+      <description>Diameter as a multiple of the image size</description>
+    </key>
+    <key name="glow-opacity" type="d">
+      <default>0.4</default>
+      <range min="0" max="1"/>
+      <summary>Glow opacity</summary>
+      <description></description>
+    </key>
+    <key name="shimmer" type="d">
+      <default>1.0</default>
+      <range min="0" max="3"/>
+      <summary>Reflection shimmer</summary>
+      <description>0 = perfectly still when there are no waves</description>
+    </key>
+    <key name="wave-distort" type="d">
+      <default>40.0</default>
+      <range min="0" max="150"/>
+      <summary>Wave distortion of the reflection</summary>
+      <description>Higher = the reflection breaks up more</description>
+    </key>
+    <key name="reflect-seg" type="i">
+      <default>8</default>
+      <range min="2" max="32"/>
+      <summary>Reflection fragment width</summary>
+      <description>The reflection is cut into pieces this many pixels wide (smaller = finer but heavier)</description>
+    </key>
+    <key name="moon-up-hours" type="i">
+      <default>12</default>
+      <range min="4" max="20"/>
+      <summary>Hours the moon stays up</summary>
+      <description>Per moonrise</description>
+    </key>
+    <key name="new-moon-hidden" type="b">
+      <default>true</default>
+      <summary>Hide the new moon</summary>
+      <description>Draw nothing on moonless days</description>
+    </key>
+    <key name="moon-age-override-enabled" type="b">
+      <default>false</default>
+      <summary>Fix the moon phase</summary>
+      <description>For previewing the phases</description>
+    </key>
+    <key name="moon-age" type="d">
+      <default>14.8</default>
+      <range min="0" max="29.5"/>
+      <summary>Moon age</summary>
+      <description>0 = new, 7.4 = first quarter, 14.8 = full, 22.1 = last quarter</description>
+    </key>
+    <key name="flow-speed" type="i">
+      <default>12</default>
+      <range min="0" max="60"/>
+      <summary>Current speed</summary>
+      <description>Leaves and weeds drift with it; 0 = still water</description>
+    </key>
+    <key name="ambient-drops" type="b">
+      <default>false</default>
+      <summary>Ambient raindrops</summary>
+      <description>Small drops occasionally fall onto the water</description>
+    </key>
+    <key name="glitter" type="b">
+      <default>false</default>
+      <summary>Glitter</summary>
+      <description>Twinkling sparkles on the water surface</description>
+    </key>
+    <key name="glare" type="b">
+      <default>false</default>
+      <summary>Legacy glare</summary>
+      <description>Fallback when there are no sun / moon images</description>
+    </key>
+    <key name="wave-drop" type="d">
+      <default>2.0</default>
+      <range min="0.2" max="6"/>
+      <summary>Drop / click strength</summary>
+      <description></description>
+    </key>
+    <key name="wave-damp" type="d">
+      <default>0.006</default>
+      <range min="0" max="0.05"/>
+      <summary>Wave damping</summary>
+      <description>Higher = waves die out faster</description>
+    </key>
+    <key name="wave-cell" type="i">
+      <default>2</default>
+      <range min="1" max="4"/>
+      <summary>Wave resolution</summary>
+      <description>1 wave cell = N pond pixels (1 = finer but about 4x heavier)</description>
+    </key>
+    <key name="wave-step-rate" type="i">
+      <default>40</default>
+      <range min="10" max="80"/>
+      <summary>Simulation steps per second</summary>
+      <description>Sets how fast waves travel</description>
+    </key>
+    <key name="wave-c2" type="d">
+      <default>0.3</default>
+      <range min="0.05" max="0.49"/>
+      <summary>Wave speed (squared)</summary>
+      <description>Must stay below 0.5 for stability</description>
+    </key>
+    <key name="ripple-life" type="d">
+      <default>3.4</default>
+      <range min="1" max="10"/>
+      <summary>Ripple startle time</summary>
+      <description>Seconds a ripple keeps startling the fish</description>
+    </key>
+    <key name="click-ms" type="i">
+      <default>250</default>
+      <range min="50" max="1000"/>
+      <summary>Maximum click duration</summary>
+      <description>ms: releasing faster than this counts as a click</description>
+    </key>
+    <key name="click-move" type="i">
+      <default>8</default>
+      <range min="1" max="40"/>
+      <summary>Drag threshold</summary>
+      <description>Screen px: moving farther than this is a drag, not a click</description>
+    </key>
+    <key name="drag-wake" type="d">
+      <default>0.18</default>
+      <range min="0" max="1"/>
+      <summary>Drag wave strength</summary>
+      <description>0 = no wake when dragging across the water</description>
+    </key>
+    <key name="drag-spacing" type="i">
+      <default>7</default>
+      <range min="2" max="30"/>
+      <summary>Wake point spacing</summary>
+      <description>Pond px, along the drag path</description>
+    </key>
+    <key name="drag-max" type="i">
+      <default>14</default>
+      <range min="1" max="40"/>
+      <summary>Maximum wake points per move</summary>
+      <description></description>
+    </key>
+    <key name="debug-click" type="b">
+      <default>false</default>
+      <summary>Log clicks</summary>
+      <description>View with journalctl -f -o cat /usr/bin/gnome-shell</description>
+    </key>
+    <key name="leaf-spawn-min" type="i">
+      <default>60</default>
+      <range min="5" max="3600"/>
+      <summary>Leaf fall interval: shortest</summary>
+      <description>Seconds between two random leaf falls</description>
+    </key>
+    <key name="leaf-spawn-max" type="i">
+      <default>300</default>
+      <range min="5" max="7200"/>
+      <summary>Leaf fall interval: longest</summary>
+      <description>Seconds</description>
+    </key>
+    <key name="leaf-extra" type="i">
+      <default>1</default>
+      <range min="0" max="10"/>
+      <summary>Extra leaves allowed</summary>
+      <description>How many leaves may exceed the fallen-leaf count</description>
+    </key>
+    <key name="leaf-per-pad" type="i">
+      <default>3</default>
+      <range min="0" max="10"/>
+      <summary>Maximum leaves per lily pad</summary>
+      <description></description>
+    </key>
+    <key name="leaf-fall-height" type="i">
+      <default>70</default>
+      <range min="20" max="200"/>
+      <summary>Starting fall height</summary>
+      <description></description>
+    </key>
+    <key name="leaf-sink-chance" type="d">
+      <default>0.35</default>
+      <range min="0" max="1"/>
+      <summary>Chance to sink on landing</summary>
+      <description>0..1</description>
+    </key>
+    <key name="leaf-sink-time" type="d">
+      <default>3.5</default>
+      <range min="0.5" max="15"/>
+      <summary>Sinking time</summary>
+      <description>Seconds from the start of sinking until reaching the bottom</description>
+    </key>
+    <key name="leaf-drag" type="d">
+      <default>5.5</default>
+      <range min="0.5" max="20"/>
+      <summary>Water drag</summary>
+      <description>Higher = less sliding, stops faster</description>
+    </key>
+    <key name="leaf-soak-wave" type="d">
+      <default>6.0</default>
+      <range min="0" max="30"/>
+      <summary>Soaking from waves</summary>
+      <description>Higher = even small waves sink leaves quickly</description>
+    </key>
+    <key name="leaf-soak-fish" type="d">
+      <default>1.5</default>
+      <range min="0" max="10"/>
+      <summary>Soaking from fish near the surface</summary>
+      <description></description>
+    </key>
+    <key name="leaf-soak-bump" type="d">
+      <default>0.5</default>
+      <range min="0" max="2"/>
+      <summary>Soaking from collisions</summary>
+      <description></description>
+    </key>
+    <key name="leaf-soak-held" type="d">
+      <default>0.25</default>
+      <range min="0" max="2"/>
+      <summary>Soaking while dragged</summary>
+      <description></description>
+    </key>
+    <key name="leaf-dry" type="d">
+      <default>0.03</default>
+      <range min="0" max="0.5"/>
+      <summary>Drying speed</summary>
+      <description>When the water is completely calm</description>
+    </key>
+    <key name="leaf-float-min" type="i">
+      <default>1800</default>
+      <range min="60" max="14400"/>
+      <summary>Float time before sinking: shortest</summary>
+      <description>Seconds (a leaf soaks through and sinks after about this long)</description>
+    </key>
+    <key name="leaf-float-max" type="i">
+      <default>3600</default>
+      <range min="60" max="14400"/>
+      <summary>Float time before sinking: longest</summary>
+      <description>Seconds</description>
+    </key>
+    <key name="leaf-bed-max" type="i">
+      <default>40</default>
+      <range min="0" max="200"/>
+      <summary>Maximum leaves on the bottom</summary>
+      <description>Beyond this the oldest leaf fades away</description>
+    </key>
+    <key name="leaf-bed-alpha" type="d">
+      <default>0.7</default>
+      <range min="0.1" max="1"/>
+      <summary>Bottom leaf opacity</summary>
+      <description></description>
+    </key>
+    <key name="leaf-bed-kick" type="d">
+      <default>9.0</default>
+      <range min="0" max="40"/>
+      <summary>Fish stirring strength on the bottom</summary>
+      <description>Higher = leaves get thrown farther</description>
+    </key>
+    <key name="leaf-bed-damp" type="d">
+      <default>4.0</default>
+      <range min="0.5" max="20"/>
+      <summary>Bottom friction</summary>
+      <description>Higher = leaves stop faster</description>
+    </key>
+    <key name="fish-bed-z" type="i">
+      <default>10</default>
+      <range min="1" max="50"/>
+      <summary>Height at which fish still stir leaves</summary>
+      <description>A fish must be this close to the bottom</description>
+    </key>
+    <key name="fish-avoid" type="d">
+      <default>3.5</default>
+      <range min="0" max="8"/>
+      <summary>Avoidance look-ahead</summary>
+      <description>Multiple of body length; 0 = no avoidance</description>
+    </key>
+    <key name="fish-act-min" type="i">
+      <default>10</default>
+      <range min="2" max="60"/>
+      <summary>Behaviour change: shortest</summary>
+      <description>Seconds</description>
+    </key>
+    <key name="fish-act-max" type="i">
+      <default>24</default>
+      <range min="2" max="120"/>
+      <summary>Behaviour change: longest</summary>
+      <description>Seconds</description>
+    </key>
+    <key name="fish-turn" type="d">
+      <default>3.2</default>
+      <range min="0.5" max="8"/>
+      <summary>Maximum turn rate</summary>
+      <description>rad/s</description>
+    </key>
+    <key name="fish-depth-tint" type="d">
+      <default>0.3</default>
+      <range min="0" max="1"/>
+      <summary>Deep fish look darker / bluer</summary>
+      <description>0 = off</description>
+    </key>
+    <key name="fish-hit" type="d">
+      <default>0.9</default>
+      <range min="0.3" max="1.5"/>
+      <summary>Body hardness</summary>
+      <description>Smaller = fish may glide closer past each other</description>
+    </key>
+    <key name="pad-gap" type="d">
+      <default>1.06</default>
+      <range min="1" max="2"/>
+      <summary>Minimum gap between pads</summary>
+      <description>Multiple of the sum of the radii</description>
+    </key>
+    <key name="pad-rest" type="d">
+      <default>0.06</default>
+      <range min="0" max="1"/>
+      <summary>Bounciness on contact</summary>
+      <description>0 = stick together</description>
+    </key>
+    <key name="pad-friction" type="d">
+      <default>0.35</default>
+      <range min="0" max="1"/>
+      <summary>Edge friction</summary>
+      <description></description>
+    </key>
+    <key name="leaf-wash" type="d">
+      <default>0.14</default>
+      <range min="0.02" max="0.5"/>
+      <summary>Wave height that washes leaves off a pad</summary>
+      <description></description>
+    </key>
+    <key name="wave-push-pad" type="i">
+      <default>45</default>
+      <range min="0" max="150"/>
+      <summary>Maximum speed waves push a pad</summary>
+      <description></description>
+    </key>
+    <key name="wave-push-leaf" type="i">
+      <default>35</default>
+      <range min="0" max="150"/>
+      <summary>Maximum speed waves push a fallen leaf</summary>
+      <description></description>
+    </key>
+  </schema>
+</schemalist>

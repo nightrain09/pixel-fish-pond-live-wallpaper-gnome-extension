@@ -12,79 +12,222 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Workspace from 'resource:///org/gnome/shell/ui/workspace.js';
 import * as WindowPreview from 'resource:///org/gnome/shell/ui/windowPreview.js';
 
-// ───────────── Cấu hình (sửa tại đây) ─────────────
-const FPS_MIN = 5;           // FPS khi mọi thứ trôi chậm / yên tĩnh (càng thấp càng nhẹ)
-const FPS_MAX = 25;          // FPS khi đang kéo, hoặc lá / sóng đang chuyển động nhanh
-const ACTIVE_SPEED = 40;     // lá trôi nhanh cỡ này (px ao/giây, x u) thì chạy FPS_MAX
-const PIXEL_SIZE = 4;        // mỗi "pixel" = N pixel màn hình (3 = mịn hơn, 6 = thô hơn)
-const FISH_COUNT = 7;
-const PAD_COUNT = 6;         // số lá sen
-const RIPPLE_LIFE = 3.4;     // giây
+import {SCHEMA_ID, SPEC} from './settings-spec.js';
+
+// ───────────── Giá trị mặc định ─────────────
+// Các giá trị dưới đây chỉ là mặc định. Chỉnh trong hộp Cài đặt của extension (prefs);
+// bảng đầy đủ nằm ở settings-spec.js. Khi chạy, giá trị thật được đọc từ GSettings (xem applySettings).
+let FPS_MIN = 5;           // FPS khi mọi thứ trôi chậm / yên tĩnh (càng thấp càng nhẹ)
+let FPS_MAX = 40;          // FPS vẽ khi đang kéo, hoặc lá / sóng đang chuyển động (mô phỏng không còn phụ thuộc FPS nên tăng thoải mái)
+let ACTIVE_SPEED = 40;     // lá trôi nhanh cỡ này (px ao/giây, x u) thì chạy FPS_MAX
+let PIXEL_SIZE = 4;        // mỗi "pixel" = N pixel màn hình (3 = mịn hơn, 6 = thô hơn)
+let FISH_COUNT = 7;
+let PAD_COUNT = 6;         // số lá sen
+let RIPPLE_LIFE = 3.4;     // giây
 
 // Mô phỏng sóng nước thật (phương trình sóng 2D trên lưới độ cao)
-const WAVE_CELL = 2;         // 1 ô sóng = N pixel của ao. 1 = mịn hơn nhưng nặng gấp ~4 lần
-const WAVE_STEP_RATE = 40;   // số bước mô phỏng/giây (tốc độ sóng ~ 27 ô/giây)
-const WAVE_C2 = 0.3;         // (tốc độ sóng)^2 mỗi bước, phải < 0.5 để ổn định
-const WAVE_DAMP = 0.006;     // sóng tắt dần mỗi bước (lớn hơn = sóng tàn nhanh hơn)
+let WAVE_CELL = 2;         // 1 ô sóng = N pixel của ao. 1 = mịn hơn nhưng nặng gấp ~4 lần
+let WAVE_STEP_RATE = 40;   // số bước mô phỏng/giây (tốc độ sóng ~ 27 ô/giây)
+let WAVE_C2 = 0.3;         // (tốc độ sóng)^2 mỗi bước, phải < 0.5 để ổn định
+let WAVE_DAMP = 0.006;     // sóng tắt dần mỗi bước (lớn hơn = sóng tàn nhanh hơn)
 const WAVE_SPONGE = 6;       // số ô ở mép hút sóng, để sóng không dội ngược lại từ mép màn hình
-const WAVE_DROP = 2.0;       // độ mạnh của một giọt/click
+let WAVE_DROP = 2.0;       // độ mạnh của một giọt/click
+let PHYS_DT = 1 / WAVE_STEP_RATE;   // bước mô phỏng CỐ ĐỊNH (giây): 1 bước vật lý = 1 bước sóng, không phụ thuộc FPS vẽ
+// Sóng đẩy vật nổi: sóng quyết định "vận tốc mà vật bị cuốn theo" (mượt, bão hoà mềm), vật bám theo bằng quán tính
+// của nước. Giao thoa vẫn cộng độ cao sóng đúng; chỉ là nhiều sóng chồng nhau không còn gia tốc vật lên vô hạn.
+let WAVE_PUSH_PAD = 45;    // vận tốc tối đa (x u, px ao/giây) mà sóng có thể cuốn lá sen đi
+let WAVE_PUSH_LEAF = 35;   // như trên, cho lá rụng (nước hãm nên không bị cuốn đi quá nhanh)
+const WAVE_PUSH_GAIN_PAD = 400;    // sóng yếu: vận tốc cuốn = hệ số này x độ dốc sóng (x u); lớn hơn = nhạy hơn
+const WAVE_PUSH_GAIN_LEAF = 500;
+const WAVE_PUSH_TAU = 0.12;  // giây: độ trễ làm mượt vận tốc cuốn (nhỏ = phản ứng gắt hơn)
 const WAVE_REST = 0.008;     // dưới ngưỡng này coi như mặt nước phẳng, ngừng tính
 const WAVE_T1 = 0.10;        // ngưỡng tô sáng/tối đậm
 const WAVE_T2 = 0.04;        // ngưỡng tô sáng/tối nhạt
 
 // Giờ trong ngày
-const TIME_OVERRIDE = null;  // ví dụ 18.5 = luôn là 18:30 (để xem thử); null = dùng giờ thật của máy
-const TIME_SPEED = 1;        // 1 = giờ thật; 600 = một ngày trôi qua trong ~2.4 phút (để xem thử)
-const AMBIENT_DROPS = false;  // thỉnh thoảng có giọt mưa nhỏ tự rơi (vẽ cả giọt đang rơi xuống)
-const GLITTER = false;       // false = tắt các điểm lấp lánh trên mặt nước
-const GLARE = false;         // quầng sáng mờ cũ (true = bật lại). Tự dùng làm dự phòng nếu thiếu file PNG
-const CELESTIAL = true;      // true = vẽ ảnh PNG mặt trời / mặt trăng (thư mục sun/ và moon/) thay cho quầng sáng
+let TIME_OVERRIDE = null;  // ví dụ 18.5 = luôn là 18:30 (để xem thử); null = dùng giờ thật của máy
+let TIME_SPEED = 1;        // 1 = giờ thật; 600 = một ngày trôi qua trong ~2.4 phút (để xem thử)
+let AMBIENT_DROPS = false;  // thỉnh thoảng có giọt mưa nhỏ tự rơi (vẽ cả giọt đang rơi xuống)
+let GLITTER = false;       // false = tắt các điểm lấp lánh trên mặt nước
+let GLARE = false;         // quầng sáng mờ cũ (true = bật lại). Tự dùng làm dự phòng nếu thiếu file PNG
+let CELESTIAL = true;      // true = vẽ ảnh PNG mặt trời / mặt trăng (thư mục sun/ và moon/) thay cho quầng sáng
 const SUN_DIR = 'sun';       // thư mục ảnh mặt trời, nằm cạnh extension.js
 const MOON_DIR = 'moon';     // thư mục ảnh mặt trăng (các pha, xếp theo tên: ảnh đầu = trăng non, giữa = trăng rằm)
-const SUN_SIZE = 0.12;       // chiều lớn nhất của ảnh mặt trời = bấy nhiêu lần chiều rộng màn hình
-const MOON_SIZE = 0.09;      // như trên, cho mặt trăng
-const CELESTIAL_OPACITY = 1.0;
-const GLOW = true;               // quầng sáng (glow) quanh mặt trời / mặt trăng
-const GLOW_SIZE = 2.6;           // đường kính glow = bấy nhiêu lần kích thước ảnh
-const GLOW_OPACITY = 0.40;       // độ đậm glow ở tâm (0..1)
-const SHIMMER = 1.0;             // độ rung lăn tăn của bóng khi nước lặng (0 = đứng yên khi không có sóng)
-const WAVE_DISTORT = 40;         // sóng làm méo / vỡ bóng mạnh cỡ nào (lớn hơn = vỡ nhiều hơn)
-const REFLECT_SEG = 8;           // bóng bị cắt thành các mảnh rộng bấy nhiêu pixel ao (nhỏ = vỡ mịn hơn nhưng nặng hơn)
-const CELESTIAL_ON_TOP = true;   // true = vẽ sau cùng (sáng rõ, nằm trên lá sen); false = nằm dưới lá sen và bị tối theo màu giờ
-const MOON_UP_HOURS = 12;    // mặt trăng ở trên trời bao nhiêu tiếng mỗi lần mọc
-const NEW_MOON_HIDDEN = true;    // ngày không trăng (trăng non) thì không vẽ gì
-const MOON_AGE_OVERRIDE = null;  // xem thử pha trăng: 0 = non, 7.4 = thượng huyền, 14.8 = rằm, 22.1 = hạ huyền; null = dùng ngày thật
-const WATER_OPACITY = 1.0;   // <1 để thấy hình nền gốc xuyên qua
-const DEBUG_CLICK = false;   // true: ghi log mỗi lần click (xem bằng journalctl -f -o cat /usr/bin/gnome-shell)
-const CLICK_MS = 250;        // nhả chuột trong bấy nhiêu ms và gần như không di chuyển thì mới tính là click
-const CLICK_MOVE = 8;        // px màn hình: di chuyển quá bấy nhiêu thì coi là kéo, không phải click
-const DRAG_WAKE = 0.18;      // giữ chuột trái kéo trên nền: độ mạnh sóng mỗi điểm dọc đường kéo (0 = tắt)
-const DRAG_SPACING = 7;      // px ao: khoảng cách giữa hai điểm sóng dọc đường kéo
-const DRAG_MAX = 14;         // tối đa bấy nhiêu điểm sóng mỗi lần chuột di chuyển
-const FLOW_SPEED = 12;       // tốc độ dòng nước (lá và rong trôi theo), 0 = nước đứng yên
-const LEAF_COUNT = 9;        // số lá rụng nhỏ trôi trên mặt nước
-const WEED_COUNT = 7;        // số cụm rong dưới đáy
+let SUN_SIZE = 0.12;       // chiều lớn nhất của ảnh mặt trời = bấy nhiêu lần chiều rộng màn hình
+let MOON_SIZE = 0.09;      // như trên, cho mặt trăng
+let CELESTIAL_OPACITY = 1.0;
+let GLOW = true;               // quầng sáng (glow) quanh mặt trời / mặt trăng
+let GLOW_SIZE = 2.6;           // đường kính glow = bấy nhiêu lần kích thước ảnh
+let GLOW_OPACITY = 0.40;       // độ đậm glow ở tâm (0..1)
+let SHIMMER = 1.0;             // độ rung lăn tăn của bóng khi nước lặng (0 = đứng yên khi không có sóng)
+let WAVE_DISTORT = 40;         // sóng làm méo / vỡ bóng mạnh cỡ nào (lớn hơn = vỡ nhiều hơn)
+let REFLECT_SEG = 8;           // bóng bị cắt thành các mảnh rộng bấy nhiêu pixel ao (nhỏ = vỡ mịn hơn nhưng nặng hơn)
+let CELESTIAL_ON_TOP = true;   // true = vẽ sau cùng (sáng rõ, nằm trên lá sen); false = nằm dưới lá sen và bị tối theo màu giờ
+let MOON_UP_HOURS = 12;    // mặt trăng ở trên trời bao nhiêu tiếng mỗi lần mọc
+let NEW_MOON_HIDDEN = true;    // ngày không trăng (trăng non) thì không vẽ gì
+let MOON_AGE_OVERRIDE = null;  // xem thử pha trăng: 0 = non, 7.4 = thượng huyền, 14.8 = rằm, 22.1 = hạ huyền; null = dùng ngày thật
+let WATER_OPACITY = 1.0;   // <1 để thấy hình nền gốc xuyên qua
+let DEBUG_CLICK = false;   // true: ghi log mỗi lần click (xem bằng journalctl -f -o cat /usr/bin/gnome-shell)
+let CLICK_MS = 250;        // nhả chuột trong bấy nhiêu ms và gần như không di chuyển thì mới tính là click
+let CLICK_MOVE = 8;        // px màn hình: di chuyển quá bấy nhiêu thì coi là kéo, không phải click
+let DRAG_WAKE = 0.18;      // giữ chuột trái kéo trên nền: độ mạnh sóng mỗi điểm dọc đường kéo (0 = tắt)
+let DRAG_SPACING = 7;      // px ao: khoảng cách giữa hai điểm sóng dọc đường kéo
+let DRAG_MAX = 14;         // tối đa bấy nhiêu điểm sóng mỗi lần chuột di chuyển
+let FLOW_SPEED = 12;       // tốc độ dòng nước (lá và rong trôi theo), 0 = nước đứng yên
+let LEAF_COUNT = 9;        // số lá rụng nhỏ trôi trên mặt nước
+let WEED_COUNT = 7;        // số cụm rong dưới đáy
 
 // Va chạm giữa các vật nổi (lá sen với nhau, lá rụng với nhau, lá rụng với lá sen)
-const PAD_GAP = 1.06;        // hai lá sen không được gần hơn bấy nhiêu lần tổng bán kính (chừa chỗ cho lúc lá phồng lên)
-const PAD_REST = 0.06;       // độ nảy khi hai lá sen chạm nhau (0 = dính vào nhau)
-const PAD_FRICTION = 0.35;   // ma sát ở mép lá sen
-const LEAF_REST = 0.22;      // độ nảy khi hai lá rụng chạm nhau
+let PAD_GAP = 1.06;        // hai lá sen không được gần hơn bấy nhiêu lần tổng bán kính (chừa chỗ cho lúc lá phồng lên)
+let PAD_REST = 0.06;       // độ nảy khi hai lá sen chạm nhau (0 = dính vào nhau)
+let PAD_FRICTION = 0.35;   // ma sát ở mép lá sen
+const LEAF_REST = 0.08;      // độ nảy khi hai lá rụng chạm nhau (lá bám nước nên gần như không nảy)
 const LEAF_FRICTION = 0.55;  // lá rụng bám mặt nước nên trượt lên nhau bị hãm
-const LEAF_PER_PAD = 3;      // tối đa bấy nhiêu lá rụng đậu trên một lá sen
-const LEAF_WASH = 0.14;      // biên độ sóng đủ đánh văng lá khỏi mặt lá sen
+let LEAF_PER_PAD = 3;      // tối đa bấy nhiêu lá rụng đậu trên một lá sen
+let LEAF_WASH = 0.14;      // biên độ sóng đủ đánh văng lá khỏi mặt lá sen
 const LEAF_HEIGHT = 3.0;     // lá nằm trên lá sen cao hơn mặt nước bấy nhiêu (×u) — dùng cho bóng đổ
 const LEAF_SPLASH = 0.07;    // sóng nhỏ toé ra khi lá rơi xuống nước / bị văng khỏi lá sen
 
 // Lá rụng: rơi từ trên xuống, có tỉ lệ chìm, thỉnh thoảng rơi ngẫu nhiên
-const LEAF_SPAWN_MIN = 60;    // giây: khoảng cách ngắn nhất giữa hai lá rơi ngẫu nhiên (1 phút)
-const LEAF_SPAWN_MAX = 300;   // giây: khoảng cách dài nhất (5 phút)
-const LEAF_EXTRA = 1;         // cho phép nhiều hơn LEAF_COUNT tối đa bấy nhiêu lá
-const LEAF_FALL_HEIGHT = 70;  // độ cao lúc bắt đầu rơi (×u)
+let LEAF_SPAWN_MIN = 60;    // giây: khoảng cách ngắn nhất giữa hai lá rơi ngẫu nhiên (1 phút)
+let LEAF_SPAWN_MAX = 300;   // giây: khoảng cách dài nhất (5 phút)
+let LEAF_EXTRA = 1;         // cho phép nhiều hơn LEAF_COUNT tối đa bấy nhiêu lá
+let LEAF_FALL_HEIGHT = 70;  // độ cao lúc bắt đầu rơi (×u)
 const LEAF_FALL_GRAVITY = 60; // gia tốc rơi (×u px/giây²)
-const LEAF_SINK_CHANCE = 0.25; // tỉ lệ lá chìm khi chạm mặt nước
-const LEAF_SINK_TIME = 3.5;   // giây: chìm hẳn xuống dưới mặt nước
-const LEAF_FLOAT_LIFE = [1800, 3600]; // giây (30-60 phút): trôi lâu thì ngấm nước rồi chìm
+let LEAF_SINK_CHANCE = 0.35; // tỉ lệ lá chìm ngay khi chạm mặt nước
+
+// Lá rụng trên mặt nước rất nhẹ và mỏng: nước hãm rất mạnh (không trượt/quán tính), nhưng chỉ cần một tác động
+// nhỏ là lá ngấm nước ("soak" 0..1) rồi chìm. Soak tăng khi có sóng, cá trồi sát mặt, va chạm, bị kéo.
+let LEAF_DRAG = 5.5;        // 1/giây: nước hãm vận tốc lá về vận tốc dòng nước (lớn hơn = ít trơn trượt, dừng nhanh)
+const LEAF_SOAK_MIN = 0.015;  // biên độ sóng nhỏ hơn mức này thì không làm lá ngấm nước
+let LEAF_SOAK_WAVE = 6;     // soak/giây mỗi đơn vị biên độ sóng vượt ngưỡng (sóng 0.1 => ~0.5/giây)
+let LEAF_SOAK_FISH = 1.5;   // soak/giây khi cá trồi sát mặt bơi ngay dưới lá
+let LEAF_SOAK_BUMP = 0.5;   // soak tối đa cộng thêm cho mỗi cú va chạm mạnh
+let LEAF_SOAK_HELD = 0.25;  // soak/giây khi bị chuột kéo lê trên nước
+let LEAF_DRY = 0.03;        // soak/giây tự giảm khi nước hoàn toàn lặng (lá khô dần)
+const LEAF_FISH_TOP = 14;     // (x u) cá có mặt trên cách mặt nước ít hơn mức này thì khuấy được lá trên mặt
+let LEAF_SINK_TIME = 3.5;   // giây: chìm hẳn xuống dưới mặt nước
+let LEAF_FLOAT_LIFE = [1800, 3600]; // giây (30-60 phút): trôi lâu thì ngấm nước rồi chìm
+
+// Lá đã chìm: nằm yên dưới đáy, chỉ cá ở tầng sát đáy bơi qua mới làm lá bị tung / xoay / trượt
+let LEAF_BED_MAX = 40;      // tối đa bấy nhiêu lá nằm dưới đáy; quá số này thì lá cũ nhất mờ dần rồi biến mất
+let LEAF_BED_ALPHA = 0.7;   // độ đậm của lá nằm dưới đáy
+const LEAF_BED_MIX = 0.7;     // mức ngả màu nước của lá dưới đáy (0 = giữ màu lá, 1 = hoà hẳn vào nước)
+let LEAF_BED_KICK = 9;      // độ mạnh cá khuấy lá (lớn hơn = lá bị tung xa hơn)
+let LEAF_BED_DAMP = 4;      // ma sát dưới đáy: lớn hơn = lá dừng nhanh hơn
+let FISH_BED_Z = 10;        // (x u) cá có độ cao đáy thấp hơn mức này mới khuấy được lá dưới đáy
+
+// <<settings-setters (sinh tự động bởi tools/gen.mjs, đừng sửa tay)
+const SETTERS = {
+    'fps-min': v => { FPS_MIN = v; },
+    'fps-max': v => { FPS_MAX = v; },
+    'active-speed': v => { ACTIVE_SPEED = v; },
+    'pixel-size': v => { PIXEL_SIZE = v; },
+    'water-opacity': v => { WATER_OPACITY = v; },
+    'fish-count': v => { FISH_COUNT = v; },
+    'pad-count': v => { PAD_COUNT = v; },
+    'leaf-count': v => { LEAF_COUNT = v; },
+    'weed-count': v => { WEED_COUNT = v; },
+    'time-speed': v => { TIME_SPEED = v; },
+    'celestial': v => { CELESTIAL = v; },
+    'sun-size': v => { SUN_SIZE = v; },
+    'moon-size': v => { MOON_SIZE = v; },
+    'celestial-opacity': v => { CELESTIAL_OPACITY = v; },
+    'celestial-on-top': v => { CELESTIAL_ON_TOP = v; },
+    'glow': v => { GLOW = v; },
+    'glow-size': v => { GLOW_SIZE = v; },
+    'glow-opacity': v => { GLOW_OPACITY = v; },
+    'shimmer': v => { SHIMMER = v; },
+    'wave-distort': v => { WAVE_DISTORT = v; },
+    'reflect-seg': v => { REFLECT_SEG = v; },
+    'moon-up-hours': v => { MOON_UP_HOURS = v; },
+    'new-moon-hidden': v => { NEW_MOON_HIDDEN = v; },
+    'flow-speed': v => { FLOW_SPEED = v; },
+    'ambient-drops': v => { AMBIENT_DROPS = v; },
+    'glitter': v => { GLITTER = v; },
+    'glare': v => { GLARE = v; },
+    'wave-drop': v => { WAVE_DROP = v; },
+    'wave-damp': v => { WAVE_DAMP = v; },
+    'wave-cell': v => { WAVE_CELL = v; },
+    'wave-step-rate': v => { WAVE_STEP_RATE = v; },
+    'wave-c2': v => { WAVE_C2 = v; },
+    'ripple-life': v => { RIPPLE_LIFE = v; },
+    'click-ms': v => { CLICK_MS = v; },
+    'click-move': v => { CLICK_MOVE = v; },
+    'drag-wake': v => { DRAG_WAKE = v; },
+    'drag-spacing': v => { DRAG_SPACING = v; },
+    'drag-max': v => { DRAG_MAX = v; },
+    'debug-click': v => { DEBUG_CLICK = v; },
+    'leaf-spawn-min': v => { LEAF_SPAWN_MIN = v; },
+    'leaf-spawn-max': v => { LEAF_SPAWN_MAX = v; },
+    'leaf-extra': v => { LEAF_EXTRA = v; },
+    'leaf-per-pad': v => { LEAF_PER_PAD = v; },
+    'leaf-fall-height': v => { LEAF_FALL_HEIGHT = v; },
+    'leaf-sink-chance': v => { LEAF_SINK_CHANCE = v; },
+    'leaf-sink-time': v => { LEAF_SINK_TIME = v; },
+    'leaf-drag': v => { LEAF_DRAG = v; },
+    'leaf-soak-wave': v => { LEAF_SOAK_WAVE = v; },
+    'leaf-soak-fish': v => { LEAF_SOAK_FISH = v; },
+    'leaf-soak-bump': v => { LEAF_SOAK_BUMP = v; },
+    'leaf-soak-held': v => { LEAF_SOAK_HELD = v; },
+    'leaf-dry': v => { LEAF_DRY = v; },
+    'leaf-bed-max': v => { LEAF_BED_MAX = v; },
+    'leaf-bed-alpha': v => { LEAF_BED_ALPHA = v; },
+    'leaf-bed-kick': v => { LEAF_BED_KICK = v; },
+    'leaf-bed-damp': v => { LEAF_BED_DAMP = v; },
+    'fish-bed-z': v => { FISH_BED_Z = v; },
+    'fish-avoid': v => { FISH_AVOID = v; },
+    'fish-act-min': v => { FISH_ACT_MIN = v; },
+    'fish-act-max': v => { FISH_ACT_MAX = v; },
+    'fish-turn': v => { FISH_TURN = v; },
+    'fish-depth-tint': v => { FISH_DEPTH_TINT = v; },
+    'fish-hit': v => { FISH_HIT = v; },
+    'pad-gap': v => { PAD_GAP = v; },
+    'pad-rest': v => { PAD_REST = v; },
+    'pad-friction': v => { PAD_FRICTION = v; },
+    'leaf-wash': v => { LEAF_WASH = v; },
+    'wave-push-pad': v => { WAVE_PUSH_PAD = v; },
+    'wave-push-leaf': v => { WAVE_PUSH_LEAF = v; },
+};
+// settings-setters>>
+
+// Giá trị ghép từ nhiều khoá (xử lý riêng, không có biến cùng tên)
+const SP = {timeEn: false, timeHr: 18.5, moonEn: false, moonAge: 14.8, floatMin: 1800, floatMax: 3600};
+const SPECIAL = {
+    'time-override-enabled': v => { SP.timeEn = v; },
+    'time-override-hour': v => { SP.timeHr = v; },
+    'moon-age-override-enabled': v => { SP.moonEn = v; },
+    'moon-age': v => { SP.moonAge = v; },
+    'leaf-float-min': v => { SP.floatMin = v; },
+    'leaf-float-max': v => { SP.floatMax = v; },
+};
+const SETTING_ROWS = new Map();     // key => dòng đặc tả
+for (const g of SPEC) {
+    for (const r of g.rows)
+        SETTING_ROWS.set(r.key, r);
+}
+
+// Đọc toàn bộ cài đặt từ GSettings vào các biến cấu hình ở trên
+function applySettings(settings) {
+    for (const [key, r] of SETTING_ROWS) {
+        const v = r.type === 'bool' ? settings.get_boolean(key)
+            : r.type === 'int' ? settings.get_int(key)
+                : settings.get_double(key);
+        (SETTERS[key] ?? SPECIAL[key])?.(v);
+    }
+    TIME_OVERRIDE = SP.timeEn ? SP.timeHr : null;
+    MOON_AGE_OVERRIDE = SP.moonEn ? SP.moonAge : null;
+    LEAF_FLOAT_LIFE = [Math.min(SP.floatMin, SP.floatMax), Math.max(SP.floatMin, SP.floatMax)];
+    if (LEAF_SPAWN_MAX < LEAF_SPAWN_MIN)
+        LEAF_SPAWN_MAX = LEAF_SPAWN_MIN;
+    if (FISH_ACT_MAX < FISH_ACT_MIN)
+        FISH_ACT_MAX = FISH_ACT_MIN;
+    if (FPS_MAX < FPS_MIN)
+        FPS_MAX = FPS_MIN;
+    WAVE_C2 = Math.min(WAVE_C2, 0.49);
+    PHYS_DT = 1 / WAVE_STEP_RATE;
+    _frameCache.clear();
+}
 
 let ASSET_DIR = null;            // thư mục extension, gán trong enable()
 const _imgCache = new Map();     // đường dẫn => Cairo.ImageSurface (hoặc null nếu không đọc được)
@@ -294,9 +437,18 @@ function lightAt(hour) {
 const SEG = 9;
 const PROFILE = [0.50, 0.60, 0.62, 0.58, 0.50, 0.40, 0.30, 0.22, 0.15];
 const FISH_BEND = 0.30;   // rad: mỗi đốt thân chỉ gập tối đa bấy nhiêu so với đốt trước
-const FISH_TURN = 3.2;    // rad/giây: tốc độ quay đầu tối đa (để thân không vặn)
-const FISH_ACT_MIN = 10;  // giây: thỉnh thoảng cá đổi hành vi
-const FISH_ACT_MAX = 24;  // giây: khoảng cách dài nhất giữa hai lần đổi hành vi
+let FISH_TURN = 3.2;    // rad/giây: tốc độ quay đầu tối đa (để thân không vặn)
+let FISH_ACT_MIN = 10;  // giây: thỉnh thoảng cá đổi hành vi
+let FISH_ACT_MAX = 24;  // giây: khoảng cách dài nhất giữa hai lần đổi hành vi
+const FISH_DEPTH = 56;       // độ sâu nước (x u): cá nằm trong khoảng 0 (sát đáy) .. FISH_DEPTH (sát mặt nước)
+const FISH_THICK = 0.55;     // chiều cao thân cá = size * hệ số này (hai cá chỉ va nhau khi khoảng độ cao chồng nhau)
+const FISH_DIVE_SPEED = 9;   // đơn vị độ cao/giây (x u): tốc độ trồi lên / lặn xuống
+const FISH_Z_MIN = 4;        // giây: ngắn nhất giữa hai lần cá chọn tầng mới
+const FISH_Z_MAX = 12;       // giây: dài nhất giữa hai lần cá chọn tầng mới
+let FISH_HIT = 0.9;        // thân cá "cứng" bằng bấy nhiêu lần bán kính vẽ (nhỏ hơn = cho phép lướt sát hơn)
+let FISH_AVOID = 3.5;      // cá nhìn trước bấy nhiêu lần chiều dài thân để né con cùng tầng (0 = không né, chỉ bị đẩy khi chạm)
+let FISH_DEPTH_TINT = 0.3; // cá ở sâu thì tối / xanh hơn (0 = tắt)
+const FISH_DEEP = [0.05, 0.28, 0.38];
 const PALETTES = [
     [[0.98, 0.46, 0.12], [1.00, 0.95, 0.90]],
     [[0.95, 0.20, 0.15], [1.00, 0.90, 0.80]],
@@ -304,6 +456,36 @@ const PALETTES = [
     [[0.97, 0.97, 0.95], [0.98, 0.45, 0.15]],
     [[0.15, 0.15, 0.18], [0.98, 0.50, 0.15]],
 ];
+
+// Các hướng quanh chu vi vật nổi để đo lực sóng (lấy trung bình nhiều điểm thay vì 4 điểm cách xa nhau)
+const RING_N = 12;
+const RING_COS = Array.from({length: RING_N}, (_, k) => Math.cos(k * TAU / RING_N));
+const RING_SIN = Array.from({length: RING_N}, (_, k) => Math.sin(k * TAU / RING_N));
+
+// Điểm thân của hai con cá chồng nhau sâu nhất (chỉ xét trên mặt phẳng ao).
+// Trả về {pen, nx, ny} (pen > 0 = đang chồng nhau; n hướng từ a sang b) hoặc null nếu ở quá xa.
+function fishContact(a, b) {
+    const reach = a.spacing * (SEG - 1) + a.size + b.spacing * (SEG - 1) + b.size;
+    if (Math.hypot(a.x - b.x, a.y - b.y) > reach)
+        return null;
+    let best = null;
+    for (let i = 0; i < SEG; i++) {
+        const p = a.segs[i], ra = a.size * PROFILE[i] * FISH_HIT;
+        for (let j = 0; j < SEG; j++) {
+            const q = b.segs[j];
+            const dx = q.x - p.x, dy = q.y - p.y;
+            const d = Math.hypot(dx, dy);
+            const pen = ra + b.size * PROFILE[j] * FISH_HIT - d;
+            if (!best || pen > best.pen) {
+                if (d > 1e-6)
+                    best = {pen, nx: dx / d, ny: dy / d};
+                else
+                    best = {pen, nx: Math.cos(a.angle), ny: Math.sin(a.angle)};
+            }
+        }
+    }
+    return best;
+}
 
 class Fish {
     constructor(pond, index) {
@@ -318,6 +500,11 @@ class Fish {
         this.turn = 0;
         this.phase = rand(0, TAU);
         this.spacing = this.size * 0.55;
+        // chiều cao: thân cá chiếm khoảng độ cao [zBase, zBase + zH] tính từ đáy ao
+        this.zH = this.size * FISH_THICK;
+        this.zBase = rand(0, Math.max(0, FISH_DEPTH * u - this.zH));
+        this.zTarget = this.zBase;
+        this.zT = rand(FISH_Z_MIN, FISH_Z_MAX);
         this.actT = rand(FISH_ACT_MIN, FISH_ACT_MAX);   // đếm ngược tới hành vi kế tiếp
         this.action = null;
         this.turnTarget = 0;
@@ -338,6 +525,7 @@ class Fish {
 
         // thỉnh thoảng đổi hành vi (ngoi mặt nước / quay đầu / tăng tốc / đổi hướng)
         this._behave(dt);
+        this._updateDepth(dt);
 
         // đi lang thang
         this.turn = clamp(this.turn + rand(-1, 1) * 3 * dt, -0.9, 0.9);
@@ -371,6 +559,8 @@ class Fish {
             }
         }
 
+        const avoidSlow = this._avoidFish(dt);
+
         let target = this.base * boost;
         if (this.action) {
             if (this.action.kind === 'surface')
@@ -382,6 +572,7 @@ class Fish {
             else if (this.action.kind === 'rand')
                 target = Math.max(target, this.base * 1.3);
         }
+        target *= avoidSlow;      // có cá cùng tầng chắn phía trước thì chậm lại
         this.speed += (target - this.speed) * Math.min(1, dt * 3);
 
         // giới hạn tốc độ quay đầu (trước khi bơi tiếp)
@@ -412,6 +603,84 @@ class Fish {
             b.x = a.x + Math.cos(pdir) * this.spacing;
             b.y = a.y + Math.sin(pdir) * this.spacing;
         }
+    }
+
+    // Hai con có khoảng độ cao chồng nhau không? (base = độ cao đáy giả định của chính con này)
+    zOverlaps(o, base = this.zBase) {
+        return base < o.zBase + o.zH && o.zBase < base + this.zH;
+    }
+
+    // Tịnh tiến cả con cá (đầu + mọi đốt thân)
+    shift(dx, dy) {
+        this.x += dx;
+        this.y += dy;
+        for (const q of this.segs) {
+            q.x += dx;
+            q.y += dy;
+        }
+    }
+
+    // Bị húc: hơi quay đầu ra khỏi con kia và chậm lại
+    bump(nx, ny) {
+        this.angle += clamp(angDiff(this.angle, Math.atan2(ny, nx)), -1, 1) * 0.08;
+        this.speed *= 0.96;
+    }
+
+    // Thỉnh thoảng chọn tầng nước mới; ngoi lên thì trồi sát mặt. Không được lặn/trồi vào
+    // khoảng độ cao của con khác khi thân hai con đang chồng nhau (nếu không sẽ xuyên qua nhau).
+    _updateDepth(dt) {
+        const u = this.pond.u;
+        const top = Math.max(0, FISH_DEPTH * u - this.zH);
+        this.zT -= dt;
+        if (this.zT <= 0) {
+            this.zT = rand(FISH_Z_MIN, FISH_Z_MAX);
+            this.zTarget = rand(0, top);
+        }
+        if (this.action && this.action.kind === 'surface') {
+            this.zTarget = top;
+            this.zT = Math.max(this.zT, 2);
+        }
+        const step = FISH_DIVE_SPEED * u * dt;
+        const nz = clamp(this.zBase + clamp(this.zTarget - this.zBase, -step, step), 0, top);
+        if (nz !== this.zBase) {
+            for (const o of this.pond.fish) {
+                if (o === this || !this.zOverlaps(o, nz) || this.zOverlaps(o))
+                    continue;
+                const c = fishContact(this, o);
+                if (c && c.pen > -this.size * 0.3)
+                    return;     // sẽ chui vào người con kia: giữ nguyên tầng, thử lại sau
+            }
+        }
+        this.zBase = nz;
+    }
+
+    // Nhìn trước: có thân cá cùng tầng ở phía trước thì lái sang bên (đi bên phải nhau như xe cộ)
+    // và chậm lại. Trả về hệ số tốc độ 0..1.
+    _avoidFish(dt) {
+        if (FISH_AVOID <= 0)
+            return 1;
+        const look = this.size * FISH_AVOID;
+        let steer = 0, slow = 1;
+        for (const o of this.pond.fish) {
+            if (o === this || !this.zOverlaps(o))
+                continue;
+            for (const q of o.segs) {
+                const dx = q.x - this.x, dy = q.y - this.y;
+                const d = Math.hypot(dx, dy);
+                const reach = look + o.size * 0.6;
+                if (d > reach || d < 1e-6)
+                    continue;
+                const rel = angDiff(this.angle, Math.atan2(dy, dx));
+                if (Math.abs(rel) > 1.2)
+                    continue;      // ở bên sườn xa / sau lưng: không cản đường
+                const k = 1 - d / reach;
+                steer -= (rel >= 0 ? 1 : -1) * k;
+                slow = Math.min(slow, 1 - 0.5 * k);
+            }
+        }
+        if (steer)
+            this.angle += clamp(steer, -1, 1) * dt * 4;
+        return slow;
     }
 
     // Thỉnh thoảng đổi hành vi; mỗi hành vi toé một gợn nước tại chỗ cá.
@@ -459,8 +728,12 @@ class Fish {
 
     draw(cr, shadow) {
         const u = this.pond.u;
-        const ox = shadow ? 7 * u : 0;
-        const oy = shadow ? 10 * u : 0;
+        // 0 = sát đáy, 1 = sát mặt nước: cá càng cao thì bóng trên đáy càng lệch xa, thân càng sáng
+        const zk = clamp(this.zBase / Math.max(1e-6, FISH_DEPTH * u - this.zH), 0, 1);
+        const sk = 0.4 + 0.6 * zk;
+        const ox = shadow ? 7 * u * sk : 0;
+        const oy = shadow ? 10 * u * sk : 0;
+        const dk = FISH_DEPTH_TINT * (1 - zk);
         const n = SEG - 1;
         const segs = this.segs;
 
@@ -477,8 +750,14 @@ class Fish {
         });
 
         const col = (c, a) => {
-            if (shadow) cr.setSourceRGBA(0, 0.03, 0.06, 0.14);
-            else cr.setSourceRGBA(c[0], c[1], c[2], a);
+            if (shadow) {
+                cr.setSourceRGBA(0, 0.03, 0.06, 0.14);
+            } else if (dk > 0) {
+                const m = mix3(c, FISH_DEEP, dk);
+                cr.setSourceRGBA(m[0], m[1], m[2], a);
+            } else {
+                cr.setSourceRGBA(c[0], c[1], c[2], a);
+            }
         };
 
         // đuôi
@@ -577,24 +856,22 @@ class Pad {
         const u = p.u;
         this.a += Math.sin(p.t * 0.3 + this.ph) * dt * 0.05;
 
+        // sóng đập vào mép lá: lá bị cuốn theo (vận tốc mục tiêu, bão hoà) và nhún nhẹ
+        const [wx, wy, wm] = p.waveForce(this, this.r);
+        const [dx, dy] = p.waveDrive(this, wx, wy, WAVE_PUSH_GAIN_PAD * u, WAVE_PUSH_PAD * u, dt);
+
         // đang bị chuột kéo: lò xo về phía con trỏ (hơi đàn hồi, thả ra thì trôi tiếp)
         const held = p.grab && p.grab.obj === this;
         if (held) {
             this.vx += ((p.grab.x - this.x) * 150 - this.vx * 18) * dt;
             this.vy += ((p.grab.y - this.y) * 150 - this.vy * 18) * dt;
         } else {
-            // trôi theo dòng nước (chậm hơn lá nhỏ vì nặng hơn)
+            // trôi theo dòng nước + sóng (chậm hơn lá nhỏ vì nặng hơn)
             const [fx, fy] = p.flow(this.x, this.y);
             const k = Math.min(1, dt * 1.2);
-            this.vx += (fx * 0.6 - this.vx) * k;
-            this.vy += (fy * 0.6 - this.vy) * k;
+            this.vx += (fx * 0.6 + dx - this.vx) * k;
+            this.vy += (fy * 0.6 + dy - this.vy) * k;
         }
-
-        // sóng đập vào mép lá: lá bị đẩy và nhún nhẹ
-        const [wx, wy, wm] = p.waveForce(this, this.r);
-        const kf = 250 * u * 2 * dt;
-        this.vx += wx * kf;
-        this.vy += wy * kf;
         this.pulse = Math.max(this.pulse, Math.min(1, wm * 6));
         this.pulse *= Math.exp(-dt * 2.5);
 
@@ -609,6 +886,10 @@ class Pad {
     }
 
     draw(cr, shadow) {
+        // shadow === 'mask': chỉ tô đặc hình dạng lá (dùng để khoét mặt trời / mặt trăng ra khỏi chỗ lá che)
+        const mask = shadow === 'mask';
+        if (mask)
+            shadow = false;
         const u = this.pond.u;
         const t = this.pond.t;
         const bob = Math.sin(t * 0.5 + this.ph) * 2 * u;
@@ -627,6 +908,13 @@ class Pad {
             cr.closePath();
         } else {
             cr.arc(0, 0, this.r, 0, TAU);
+        }
+
+        if (mask) {
+            cr.setSourceRGBA(0, 0, 0, 1);
+            cr.fill();
+            cr.restore();
+            return;
         }
 
         if (shadow) {
@@ -714,6 +1002,10 @@ class Leaf {
         this.sinkWait = -1;     // > 0: sắp chìm
         this.sinkT = 0;         // thời gian còn lại của màn chìm
         this.fade = 1;          // hiện dần khi mới bắt đầu rơi xuống
+        this.soak = 0;          // 0 = khô, 1 = ngấm đủ nước thì chìm
+        this.bedTilt = rand(0.55, 0.95);   // độ nghiêng cố định khi nằm dưới đáy
+        this.bedFade = 1;       // mờ dần khi bị dọn khỏi đáy
+        this.retire = false;    // true: lá dưới đáy đang mờ dần để biến mất
         this._padX = 0;
         this._padY = 0;
         this._padA = 0;
@@ -871,10 +1163,15 @@ class Leaf {
     }
 
     _startSink() {
+        if (this.pond.grab && this.pond.grab.obj === this)
+            this.pond.endGrab();
         this.state = 'sink';
         this.home = null;
         this.sinkT = LEAF_SINK_TIME;
         this.sinkWait = -1;
+        this.vx = 0;
+        this.vy = 0;
+        this.av = 0;
     }
 
     _updateOnPad(dt) {
@@ -956,6 +1253,8 @@ class Leaf {
             this._updateOnPad(dt);
         } else if (this.state === 'sink') {
             this._updateSink(dt);
+        } else if (this.state === 'bed') {
+            this._updateBed(dt);
         } else {
             this._updateWater(dt);
         }
@@ -987,33 +1286,60 @@ class Leaf {
         const u = p.u;
         const t = p.t;
 
+        const [wx, wy, wm] = p.waveForce(this, this.len);
+        const [dx, dy] = p.waveDrive(this, wx, wy, WAVE_PUSH_GAIN_LEAF * u, WAVE_PUSH_LEAF * u, dt);
+
         // đang bị chuột kéo: lò xo về phía con trỏ (lá nhẹ nên bám nhanh)
         const held = p.grab && p.grab.obj === this;
         if (held) {
             this.vx += ((p.grab.x - this.x) * 220 - this.vx * 20) * dt;
             this.vy += ((p.grab.y - this.y) * 220 - this.vy * 20) * dt;
         } else {
-            // trôi theo dòng, thêm chút lắc ngang cho tự nhiên
+            // trôi theo dòng + sóng, thêm chút lắc ngang cho tự nhiên
             const [fx, fy] = p.flow(this.x, this.y);
-            const tx = fx * 1.3 + Math.sin(t * 0.9 + this.ph) * 2.5 * u;
-            const ty = fy * 1.3 + Math.cos(t * 0.8 + this.ph) * 2.5 * u;
-            const k = Math.min(1, dt * 1.5);
+            // lá chỉ trôi đúng bằng dòng nước (không nhanh hơn), nước hãm mạnh nên vận tốc bám sát dòng,
+            // không trượt đi sau khi bị đẩy; lá ngấm nước càng nhiều càng nặng nề
+            const tx = fx + Math.sin(t * 0.9 + this.ph) * 1.0 * u + dx;
+            const ty = fy + Math.cos(t * 0.8 + this.ph) * 1.0 * u + dy;
+            const k = Math.min(1, dt * LEAF_DRAG * (1 + 1.5 * this.soak));
             this.vx += (tx - this.vx) * k;
             this.vy += (ty - this.vy) * k;
         }
 
-        // lá nhẹ nên sóng đẩy mạnh hơn lá sen
-        const [wx, wy] = p.waveForce(this, this.len);
-        const kf = 700 * u * 2 * dt;
-        this.vx += wx * kf;
-        this.vy += wy * kf;
+        // khuấy động làm lá ngấm nước: sóng quanh lá, cá trồi sát mặt bơi dưới lá, bị kéo lê
+        let soakRate = wm > LEAF_SOAK_MIN ? LEAF_SOAK_WAVE * (wm - LEAF_SOAK_MIN) : 0;
+        if (held)
+            soakRate += LEAF_SOAK_HELD;
+        const topZ = FISH_DEPTH * u;
+        for (const f of p.fish) {
+            if (topZ - (f.zBase + f.zH) > LEAF_FISH_TOP * u)
+                continue;       // cá bơi sâu: không chạm được lá trên mặt
+            if (Math.hypot(this.x - f.x, this.y - f.y) > f.spacing * (SEG - 1) + f.size * 1.5 + this.len)
+                continue;
+            for (let i = 0; i < SEG; i++) {
+                const q = f.segs[i];
+                const fdx = this.x - q.x, fdy = this.y - q.y;
+                const d = Math.hypot(fdx, fdy);
+                const reach = f.size * PROFILE[i] * 1.2 + this.len * 0.6;
+                if (d >= reach)
+                    continue;
+                const kk = 1 - d / reach;
+                soakRate += LEAF_SOAK_FISH * kk;
+                if (d > 1e-6) {
+                    // cá quẫy nước đẩy lá ra một chút
+                    this.vx += fdx / d * kk * f.speed * 6 * dt;
+                    this.vy += fdy / d * kk * f.speed * 6 * dt;
+                }
+            }
+        }
+        this.soak = clamp(this.soak + (soakRate > 0 ? soakRate : -LEAF_DRY) * dt, 0, 1.2);
 
         this.x += this.vx * dt;
         this.y += this.vy * dt;
 
-        // xoay: va chạm truyền mô men xoay, rồi dịu dần về nhịp chao tự nhiên
+        // xoay: nước hãm xoay rất nhanh, va chạm truyền mô men xoay rồi tắt dần về nhịp chao nhẹ
         const lazy = this.spin + Math.sin(t * 1.2 + this.ph) * 0.35;
-        this.av += (lazy - this.av) * Math.min(1, dt * 0.7);
+        this.av += (lazy - this.av) * Math.min(1, dt * 2.5);
         this.a += this.av * dt;
 
         p.confine(this, this.len, dt);
@@ -1026,7 +1352,7 @@ class Leaf {
                 this.sinkWait -= dt;
                 if (this.sinkWait <= 0)
                     this._startSink();
-            } else if (this.wetT > this.wetLimit) {
+            } else if (this.wetT > this.wetLimit || this.soak >= 1) {
                 this._startSink();
             }
         }
@@ -1039,24 +1365,96 @@ class Leaf {
     // Đang chìm dần dưới mặt nước
     _updateSink(dt) {
         this.sinkT -= dt;
-        if (this.sinkT <= 0)
-            this.dead = true;
+        if (this.sinkT <= 0) {
+            // chạm đáy: nằm yên ở đó
+            this.state = 'bed';
+            this.vx = 0;
+            this.vy = 0;
+            this.av = 0;
+        }
+    }
+
+    // Nằm dưới đáy: hoàn toàn đứng yên (không dòng nước, không sóng mặt, không va chạm với vật nổi).
+    // Chỉ khi một con cá ở tầng sát đáy bơi ngang qua thì lá mới bị hất đi / xoay, rồi ma sát làm dừng lại.
+    _updateBed(dt) {
+        const p = this.pond;
+        const u = p.u;
+
+        if (this.retire) {
+            this.bedFade -= dt / 2;
+            if (this.bedFade <= 0) {
+                this.dead = true;
+                return;
+            }
+        }
+
+        const zMax = FISH_BED_Z * u;
+        for (const f of p.fish) {
+            if (f.zBase > zMax)
+                continue;       // cá bơi cao hơn đáy: không chạm được lá
+            const zk = 1 - f.zBase / zMax;
+            if (Math.hypot(this.x - f.x, this.y - f.y) > f.spacing * (SEG - 1) + f.size * 1.6 + this.len)
+                continue;
+            const fx = Math.cos(f.angle), fy = Math.sin(f.angle);
+            for (let i = 0; i < SEG; i++) {
+                const q = f.segs[i];
+                let dx = this.x - q.x, dy = this.y - q.y;
+                const d = Math.hypot(dx, dy);
+                const reach = f.size * PROFILE[i] * 1.5 + this.len * 0.6;
+                if (d >= reach)
+                    continue;
+                if (d > 1e-6) {
+                    dx /= d;
+                    dy /= d;
+                } else {
+                    dx = -fy;
+                    dy = fx;
+                }
+                const k = (1 - d / reach) * zk;
+                const acc = LEAF_BED_KICK * f.speed * k;
+                // bị đẩy ra khỏi thân cá và cuốn theo hướng cá bơi (dòng xoáy sau thân)
+                this.vx += (dx * 0.7 + fx * 0.5) * acc * dt;
+                this.vy += (dy * 0.7 + fy * 0.5) * acc * dt;
+                // lá nằm lệch phía nào so với hướng cá bơi thì xoay theo phía đó
+                this.av += (dx * fy - dy * fx) * acc * 0.02 * dt;
+            }
+        }
+
+        const sp = Math.hypot(this.vx, this.vy);
+        if (sp < 0.8 * u && Math.abs(this.av) < 0.05) {
+            this.vx = 0;
+            this.vy = 0;
+            this.av = 0;
+            return;
+        }
+
+        const damp = Math.exp(-dt * LEAF_BED_DAMP);
+        this.vx *= damp;
+        this.vy *= damp;
+        this.av *= Math.exp(-dt * 3);
+        this.x = clamp(this.x + this.vx * dt, 0, p.w);
+        this.y = clamp(this.y + this.vy * dt, 0, p.h);
+        this.a += this.av * dt;
     }
 
     draw(cr, shadow) {
+        const mask = shadow === 'mask';   // chỉ tô đặc hình dạng lá để khoét mặt trời / mặt trăng
+        if (mask)
+            shadow = false;
         const p = this.pond;
         const u = p.u;
         const t = p.t;
         const L = this.len;
         const W = L * 0.42;
 
-        // đang chìm: không có bóng, mờ dần và ngả màu nước
-        if (this.state === 'sink') {
+        // đang chìm / đã nằm dưới đáy: không có bóng, ngả màu nước, đậm dần về mức LEAF_BED_ALPHA
+        if (this.state === 'sink' || this.state === 'bed') {
             if (shadow)
                 return;
-            const prog = clamp(1 - this.sinkT / LEAF_SINK_TIME, 0, 1);
-            const c = mix3(this.color, [0.07, 0.28, 0.28], 0.35 + 0.6 * prog);
-            const tilt = 0.6 + 0.4 * Math.abs(Math.cos(t * 0.7 + this.ph));
+            const prog = this.state === 'bed' ? 1 : clamp(1 - this.sinkT / LEAF_SINK_TIME, 0, 1);
+            const c = mix3(this.color, [0.07, 0.28, 0.28], 0.35 + (LEAF_BED_MIX - 0.35) * prog);
+            const tilt = (0.6 + 0.4 * Math.abs(Math.cos(t * 0.7 + this.ph))) * (1 - prog) + this.bedTilt * prog;
+            const alpha = (0.92 + (LEAF_BED_ALPHA - 0.92) * prog) * this.bedFade;
             cr.save();
             cr.translate(this.x, this.y);
             cr.rotate(this.a);
@@ -1066,7 +1464,7 @@ class Leaf {
             cr.curveTo(-L * 0.4, -W * 1.6, L * 0.5, -W * 1.6, L, 0);
             cr.curveTo(L * 0.5, W * 1.6, -L * 0.4, W * 1.6, -L, 0);
             cr.closePath();
-            cr.setSourceRGBA(c[0], c[1], c[2], 0.92 * (1 - 0.9 * prog));
+            cr.setSourceRGBA(c[0], c[1], c[2], alpha);
             cr.fill();
             cr.restore();
             return;
@@ -1113,11 +1511,17 @@ class Leaf {
         cr.curveTo(L * 0.5, W * 1.6, -L * 0.4, W * 1.6, -L, 0);
         cr.closePath();
 
-        if (shadow) {
+        if (mask) {
+            cr.setSourceRGBA(0, 0, 0, 1);
+            cr.fill();
+        } else if (shadow) {
             cr.setSourceRGBA(0, 0.03, 0.06, alpha);
             cr.fill();
         } else {
-            const c = this.color;
+            // lá ngấm nước thì sẫm và ngả màu nước dần trước khi chìm
+            const c = this.soak > 0.02 && this.state === 'water'
+                ? mix3(this.color, [0.07, 0.28, 0.28], clamp(this.soak, 0, 1) * 0.45)
+                : this.color;
             const fa = falling ? this.fade : 1;
             cr.setSourceRGBA(c[0], c[1], c[2], 0.95 * fa);
             cr.fill();
@@ -1305,6 +1709,9 @@ class Pond {
             return;
         nx /= d;
         ny /= d;
+        // đụng mép lá sen: lá bị nhúng nước
+        const rel = Math.hypot(leaf.vx - pad.vx, leaf.vy - pad.vy);
+        leaf.soak += clamp(rel / (60 * this.u), 0, 1) * LEAF_SOAK_BUMP;
         resolveContact(pad, leaf, nx, ny, minD - d, px, py, LEAF_REST, LEAF_FRICTION);
     }
 
@@ -1319,6 +1726,12 @@ class Pond {
         const minD = a.rad + b.rad;
         if (c.d >= minD)
             return;
+        // hai lá va nhau trên mặt nước: cả hai bị nhúng nước (lá đậu trên lá sen thì khô, không tính)
+        if (a.state === 'water' && b.state === 'water') {
+            const s = clamp(Math.hypot(a.vx - b.vx, a.vy - b.vy) / (60 * this.u), 0, 1) * LEAF_SOAK_BUMP;
+            a.soak += s;
+            b.soak += s;
+        }
         resolveContact(a, b, c.nx, c.ny, minD - c.d,
             (c.px + c.qx) * 0.5, (c.py + c.qy) * 0.5, LEAF_REST, LEAF_FRICTION);
     }
@@ -1354,6 +1767,33 @@ class Pond {
             for (let i = 0; i < leaves.length; i++) {
                 for (let j = i + 1; j < leaves.length; j++)
                     this._leafLeafContact(leaves[i], leaves[j]);
+            }
+        }
+    }
+
+    // Cá cùng tầng (khoảng độ cao chồng nhau) không được xuyên qua nhau: đẩy rời nhau, con nhỏ bị đẩy nhiều hơn.
+    // Cá khác tầng thì bơi chồng lên nhau thoải mái.
+    _resolveFish() {
+        const fs = this.fish;
+        for (let it = 0; it < 3; it++) {
+            for (let i = 0; i < fs.length; i++) {
+                for (let j = i + 1; j < fs.length; j++) {
+                    const a = fs[i], b = fs[j];
+                    if (!a.zOverlaps(b))
+                        continue;
+                    const c = fishContact(a, b);
+                    if (!c || c.pen <= 0.3)
+                        continue;
+                    const ma = a.size * a.size, mb = b.size * b.size;
+                    const corr = (c.pen - 0.3) * 0.8;
+                    const ka = mb / (ma + mb), kb = ma / (ma + mb);
+                    a.shift(-c.nx * corr * ka, -c.ny * corr * ka);
+                    b.shift(c.nx * corr * kb, c.ny * corr * kb);
+                    if (it === 0) {
+                        a.bump(-c.nx, -c.ny);
+                        b.bump(c.nx, c.ny);
+                    }
+                }
             }
         }
     }
@@ -1846,8 +2286,8 @@ class Pond {
             return;     // mặt nước phẳng: khỏi tính (mask sẽ được dựng lại khi có giọt mới)
         this._rasterObstacles();
         this._stepAcc = Math.min(this._stepAcc + dt * WAVE_STEP_RATE, 8);
-        const steps = Math.floor(this._stepAcc);
-        this._stepAcc -= steps;
+        const steps = Math.floor(this._stepAcc + 1e-6);   // +epsilon: tránh 0.9999999 làm lỡ bước
+        this._stepAcc = Math.max(0, this._stepAcc - steps);
         for (let s = 0; s < steps; s++)
             this._step();
     }
@@ -1978,9 +2418,34 @@ class Pond {
         if (this.waveEnergy < WAVE_REST)
             return [0, 0, 0];
         const s = rad + WAVE_CELL * 1.5;
-        const l = this.waveAt(o.x - s, o.y), r = this.waveAt(o.x + s, o.y);
-        const t = this.waveAt(o.x, o.y - s), b = this.waveAt(o.x, o.y + s);
-        return [l - r, t - b, Math.max(Math.abs(l), Math.abs(r), Math.abs(t), Math.abs(b))];
+        // F = -(4/N) * sum(độ cao * pháp tuyến) quanh chu vi: với sóng dài bằng đúng (trái - phải, trên - dưới) như trước,
+        // còn sóng ngắn (bước sóng nhỏ hơn vật) tự triệt tiêu thay vì bị lấy mẫu ngẫu nhiên ở 4 điểm xa nhau
+        let fx = 0, fy = 0, m = 0;
+        for (let k = 0; k < RING_N; k++) {
+            const v = this.waveAt(o.x + RING_COS[k] * s, o.y + RING_SIN[k] * s);
+            fx -= v * RING_COS[k];
+            fy -= v * RING_SIN[k];
+            const a = v < 0 ? -v : v;
+            if (a > m)
+                m = a;
+        }
+        return [fx * 4 / RING_N, fy * 4 / RING_N, m];
+    }
+
+    // Vận tốc mục tiêu mà sóng cuốn vật đi: tỉ lệ với độ dốc sóng khi sóng yếu, bão hoà mềm (tanh) khi sóng mạnh,
+    // rồi làm mượt theo thời gian. Vật bám theo vận tốc này bằng cùng cơ chế trôi theo dòng nước.
+    waveDrive(o, wx, wy, gain, vmax, dt) {
+        const m = Math.hypot(wx, wy);
+        let tx = 0, ty = 0;
+        if (m > 1e-9) {
+            const sp = vmax * Math.tanh(gain * m / vmax);
+            tx = wx / m * sp;
+            ty = wy / m * sp;
+        }
+        const a = 1 - Math.exp(-dt / WAVE_PUSH_TAU);
+        o._wtx = (o._wtx ?? 0) + (tx - (o._wtx ?? 0)) * a;
+        o._wty = (o._wty ?? 0) + (ty - (o._wty ?? 0)) * a;
+        return [o._wtx, o._wty];
     }
 
     // Sóng quanh mép một lá sen: biên độ lớn nhất + hướng nước ập vào.
@@ -2169,7 +2634,13 @@ class Pond {
         this._spawnT -= dt;
         if (this._spawnT <= 0) {
             this._spawnT = rand(LEAF_SPAWN_MIN, LEAF_SPAWN_MAX);
-            let room = this.leaves.length < LEAF_COUNT + LEAF_EXTRA;
+            // lá đã chìm / nằm dưới đáy không tính vào giới hạn lá trên mặt nước
+            let floating = 0;
+            for (const l of this.leaves) {
+                if (l.state !== 'sink' && l.state !== 'bed')
+                    floating++;
+            }
+            let room = floating < LEAF_COUNT + LEAF_EXTRA;
             if (!room)
                 room = this._sinkOldest();   // ao đã đầy: lá trôi lâu nhất ngấm nước, nhường chỗ
             if (room) {
@@ -2182,13 +2653,26 @@ class Pond {
         this._stepWaves(dt);
 
         for (const f of this.fish) f.update(dt);
+        this._resolveFish();
         for (const p of this.pads) p.update(dt);
         for (const l of this.leaves) l.update(dt);
 
         // va chạm sau khi mọi vật đã di chuyển: không vật nổi nào đè lên nhau
         this._resolveFloating();
 
-        // lá đã chìm hẳn thì bỏ khỏi ao (lá mới sẽ rụng xuống thay)
+        // đáy đầy: lá nằm lâu nhất mờ dần rồi biến mất
+        let bed = 0, oldest = null;
+        for (const l of this.leaves) {
+            if (l.state === 'bed' && !l.retire) {
+                bed++;
+                if (!oldest)
+                    oldest = l;
+            }
+        }
+        if (bed > LEAF_BED_MAX && oldest)
+            oldest.retire = true;
+
+        // lá bị dọn khỏi đáy thì bỏ khỏi ao
         if (this.leaves.some(l => l.dead))
             this.leaves = this.leaves.filter(l => !l.dead);
     }
@@ -2230,7 +2714,7 @@ class Pond {
         dry.length = 0;
         sunk.length = 0;
         for (const l of this.leaves) {
-            if (l.state === 'sink')
+            if (l.state === 'sink' || l.state === 'bed')
                 sunk.push(l);
             else if (l.state === 'water')
                 wet.push(l);
@@ -2257,8 +2741,10 @@ class Pond {
         }
 
         // cá (bóng rồi thân), lá sen phủ lên trên
-        for (const f of this.fish) f.draw(cr, true);
-        for (const f of this.fish) f.draw(cr, false);
+        // con ở sâu vẽ trước, con ở cao vẽ đè lên
+        const fishByZ = [...this.fish].sort((a, b) => a.zBase - b.zBase);
+        for (const f of fishByZ) f.draw(cr, true);
+        for (const f of fishByZ) f.draw(cr, false);
 
         // sóng nằm trên mặt nước (phủ lên cá) nhưng dưới lá sen và lá rụng
         this._drawWaves(cr);
@@ -2303,8 +2789,20 @@ class Pond {
 
         // lấp lánh vẽ sau cùng để không bị tối theo màu môi trường
         this._drawGlitter(cr);
-        if (CELESTIAL && CELESTIAL_ON_TOP)
-            this._drawCelestial(cr);
+        if (CELESTIAL && CELESTIAL_ON_TOP) {
+            // mặt trời / mặt trăng chỉ là bóng trên mặt nước: vẽ sáng rõ, nhưng lá sen và lá rụng
+            // (trên mặt nước, trên lá sen, đang rơi) phải che lên nó => khoét đúng hình các lá ra khỏi lớp này
+            cr.pushGroup();
+            if (this._drawCelestial(cr)) {
+                cr.setOperator(Cairo.Operator.DEST_OUT);
+                for (const pd of this.pads) pd.draw(cr, 'mask');
+                for (const l of wet) l.draw(cr, 'mask');
+                for (const l of dry) l.draw(cr, 'mask');
+                cr.setOperator(Cairo.Operator.OVER);
+            }
+            cr.popGroupToSource();
+            cr.paint();
+        }
 
         // tối nhẹ ở góc cho có chiều sâu (cache)
         cr.setSourceSurface(this._vig, 0, 0);
@@ -2408,6 +2906,20 @@ export default class KoiPondExtension extends Extension {
         this._drag = null;        // đang giữ chuột để kéo sóng
         this._t0 = GLib.get_monotonic_time();
 
+        // cài đặt từ hộp Cài đặt của extension (nếu schema chưa biên dịch thì dùng giá trị mặc định)
+        this._settings = null;
+        this._settingsId = 0;
+        this._settingsTimer = 0;
+        this._pendingKeys = new Set();
+        try {
+            this._settings = this.getSettings(SCHEMA_ID);
+            applySettings(this._settings);
+            this._settingsId = this._settings.connect('changed',
+                (_s, key) => this._onSettingChanged(key));
+        } catch (e) {
+            logError(e, 'koipond settings (dùng giá trị mặc định)');
+        }
+
         this._buildViews();
         this._hookOverview();
 
@@ -2416,6 +2928,13 @@ export default class KoiPondExtension extends Extension {
             (a, e) => this._onCapturedEvent(a, e));
 
         this._last = GLib.get_monotonic_time();
+        this._startTimer();
+    }
+
+    // Vòng lặp chính (chạy lại khi FPS tối đa đổi)
+    _startTimer() {
+        if (this._timeoutId)
+            GLib.Source.remove(this._timeoutId);
         this._timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, Math.round(1000 / FPS_MAX), () => {
             try {
                 this._tick();
@@ -2429,6 +2948,35 @@ export default class KoiPondExtension extends Extension {
         });
     }
 
+    // ── Cài đặt: gom các thay đổi liên tiếp (kéo thanh số...) rồi áp một lần ──
+    _onSettingChanged(key) {
+        this._pendingKeys.add(key);
+        if (this._settingsTimer)
+            return;
+        this._settingsTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, () => {
+            this._settingsTimer = 0;
+            try {
+                this._applyPendingSettings();
+            } catch (e) {
+                logError(e, 'koipond apply settings');
+            }
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _applyPendingSettings() {
+        const keys = [...this._pendingKeys];
+        this._pendingKeys.clear();
+        if (!this._settings || !this._views)
+            return;
+        applySettings(this._settings);
+        // số lượng / độ phân giải / bộ nhớ đệm đổi => dựng lại ao; còn lại có hiệu lực ngay
+        if (keys.some(k => SETTING_ROWS.get(k)?.structural))
+            this._rebuild();
+        if (keys.includes('fps-max'))
+            this._startTimer();
+    }
+
     disable() {
         this._press = null;
         this._endDrag();
@@ -2436,6 +2984,15 @@ export default class KoiPondExtension extends Extension {
             GLib.Source.remove(this._timeoutId);
             this._timeoutId = 0;
         }
+        if (this._settingsTimer) {
+            GLib.Source.remove(this._settingsTimer);
+            this._settingsTimer = 0;
+        }
+        if (this._settings && this._settingsId) {
+            this._settings.disconnect(this._settingsId);
+            this._settingsId = 0;
+        }
+        this._settings = null;
         if (this._monitorsId) {
             Main.layoutManager.disconnect(this._monitorsId);
             this._monitorsId = 0;
@@ -2772,11 +3329,12 @@ export default class KoiPondExtension extends Extension {
             if (!Main.overview.visible && this._isCovered(v.index))
                 continue;
             v.pond.setHour(hour);
-            // FPS thấp thì chia nhỏ bước mô phỏng để mọi thứ vẫn chạy đúng tốc độ thật
-            for (let rem = Math.min(dt, 0.4); rem > 1e-6;) {
-                const d = Math.min(rem, 0.05);
-                v.pond.update(d);
-                rem -= d;
+            // Bước mô phỏng CỐ ĐỊNH (PHYS_DT): FPS vẽ cao hay thấp thì vật lý, va chạm và sóng
+            // vẫn chạy y hệt nhau, chỉ khác số lần vẽ. Phần dư được giữ lại cho lần sau.
+            v._acc = Math.min((v._acc ?? 0) + dt, 0.25);
+            while (v._acc >= PHYS_DT) {
+                v.pond.update(PHYS_DT);
+                v._acc -= PHYS_DT;
             }
             v.area.queue_repaint();
         }
